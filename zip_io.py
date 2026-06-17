@@ -78,23 +78,19 @@ def read_zip_entries(zip_path: Path) -> list:
 
 def import_zip_entries(zip_path: Path, save_dir: Path, selected_names: list) -> dict:
     """
-    把 zip 里勾选的文件密文原样写入 save_dir
-    存在同名文件时**默认跳过**,返回 {'imported': [...], 'skipped_existing': [...]}
-    调用方负责处理"是否覆盖"的用户确认
+    把 zip 里勾选的文件密文原样写入 save_dir(直接覆盖,不做存在性检查)
+    覆盖确认由调用方(viewer.on_import)在调用前完成
+    返回 {'imported': [...], 'failed': [...]}  failed = zip 内找不到该条目
     """
     save_dir.mkdir(parents=True, exist_ok=True)
-    imported, skipped = [], []
+    imported, failed = [], []
     with zipfile.ZipFile(zip_path) as zf:
+        available = set(zf.namelist())
         for name in selected_names:
+            if name not in available:
+                failed.append(name)
+                continue
             target = save_dir / name
-            try:
-                data = zf.read(name)
-            except KeyError:
-                skipped.append(name)
-                continue
-            if target.exists():
-                skipped.append(name)
-                continue
-            target.write_bytes(data)
+            target.write_bytes(zf.read(name))
             imported.append(name)
-    return {'imported': imported, 'skipped_existing': skipped}
+    return {'imported': imported, 'failed': failed}

@@ -5,8 +5,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtCore import Qt, QUrl
+from PyQt5.QtGui import QDesktopServices, QFont
 from PyQt5.QtWidgets import (
     QAction, QApplication, QCheckBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel,
@@ -259,7 +259,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(tb)
 
         a_open = QAction('📂 打开存档目录', self)
-        a_open.triggered.connect(self.reload_default_dir)
+        a_open.triggered.connect(self.on_open_dir)
         tb.addAction(a_open)
 
         a_export = QAction('📦 导出全部', self)
@@ -345,6 +345,19 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f'已加载 {loaded} 个存档(目录: {save_dir})  时间: {datetime.now():%H:%M:%S}'
         )
+
+    def on_open_dir(self):
+        """用系统文件管理器打开默认存档目录"""
+        save_dir = default_save_dir()
+        if not save_dir.exists():
+            # 目录不存在,提示一下
+            QMessageBox.information(
+                self, '打开存档目录',
+                f'目录不存在,可能是游戏从未启动过:\n{save_dir}'
+            )
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(save_dir)))
+        self.statusBar().showMessage(f'已打开: {save_dir}')
 
     def _rebuild_tree(self):
         self.tree.clear()
@@ -531,7 +544,7 @@ class MainWindow(QMainWindow):
         # 5) 实际导入
         result = import_zip_entries(zip_path, save_dir, overwritten)
         imported = result['imported']
-        skipped_missing = result['skipped_existing']  # zip 内 missing
+        failed = result['failed']  # zip 内确实找不到的条目(理论上不应出现)
 
         # 6) 反馈
         msg_parts = []
@@ -539,8 +552,8 @@ class MainWindow(QMainWindow):
             msg_parts.append(f'已导入 {len(imported)} 个:\n' + '\n'.join(imported))
         if skipped_overwrite:
             msg_parts.append('用户取消覆盖:\n' + '\n'.join(skipped_overwrite))
-        if skipped_missing:
-            msg_parts.append('zip 内缺失:\n' + '\n'.join(skipped_missing))
+        if failed:
+            msg_parts.append('zip 内缺失(异常):\n' + '\n'.join(failed))
         if not msg_parts:
             msg_parts.append('未执行任何操作')
 
@@ -555,8 +568,8 @@ class MainWindow(QMainWindow):
             '<p>Unity 冒险岛存档浏览器(只读)</p>'
             '<p>支持两类存档:</p>'
             '<ul>'
-            '<li>RoleInfo.json (密钥 0x9F)</li>'
-            '<li>PlayerNN.json (密钥 0x77)</li>'
+            '<li>RoleInfo.json (账号全局)</li>'
+            '<li>PlayerNN.json (单角色)</li>'
             '</ul>'
             '<p>默认存档目录:<br>'
             f'{default_save_dir()}</p>'
