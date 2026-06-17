@@ -38,25 +38,11 @@ def decode(raw: bytes, key: int) -> dict:
 
 def map_job_id(job_id: int) -> str:
     """
-    职业 ID → 可读字符串(带转职推断)
-
-    规则(基于 mem0 记录的冒险岛传统编码):
-        0          = 新手(0 转)
-        xx0        = 1 转
-        xx1, xx2   = 2 转
-        xx3        = 4 转
-    后续你提供完整 ID 映射表后,改成查表,只改这一个函数
+    职业 ID → 字符串
+    暂只返回原数字 ID,不做中文名映射
+    后续你提供完整 ID 映射表后,改成查表(返回名字),只改这一个函数
     """
-    if job_id == 0:
-        return f'{job_id} (新手)'
-    tier = job_id % 10
-    if tier == 0:
-        return f'{job_id} (1 转)'
-    if tier in (1, 2):
-        return f'{job_id} (2 转)'
-    if tier == 3:
-        return f'{job_id} (4 转)'
-    return f'{job_id}'
+    return str(job_id)
 
 
 def bag_total(data: dict) -> int:
