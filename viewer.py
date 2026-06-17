@@ -88,23 +88,41 @@ class PlayerOverviewPage(QWidget):
 
 # =================== RoleInfo 角色列表页 ===================
 class RoleListPage(QWidget):
+    """RoleInfo 的角色列表页:2 列(角色名 / 等级)
+    角色名通过扫描 PlayerNN.json 实时查得,缺失则显示 ID"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
-        self.table = QTableWidget(0, 1)
-        self.table.setHorizontalHeaderLabels(['角色 ID'])
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(['角色名', '等级'])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self.table)
 
     def set_data(self, data: dict):
-        roles = data.get('roles', []) or []
+        # data 是 RoleInfo 解码结果,含 roles 列表
+        # name/lev 需要从对应的 PlayerNN.json 拿
+        # MainWindow 调用前需要把 loaded_saves 传进来?简化:只从 roles 显示 ID,等级空
+        # 真正实现走 MainWindow._show_role_list
+        self._roles = data.get('roles', []) or []
+        self._refresh([])
+
+    def set_data_with_players(self, roles: list, player_lookup: dict):
+        """roles: ['Player00','Player01',...]; player_lookup: {name: {name, lev}}"""
         self.table.setRowCount(len(roles))
-        for i, r in enumerate(roles):
-            self.table.setItem(i, 0, QTableWidgetItem(str(r)))
+        for i, rid in enumerate(roles):
+            info = player_lookup.get(rid)
+            if info:
+                name = info.get('name', '?')
+                lev = str(info.get('lev', '?'))
+            else:
+                name = rid  # 未加载时显示 ID
+                lev = '-'
+            self.table.setItem(i, 0, QTableWidgetItem(str(name)))
+            self.table.setItem(i, 1, QTableWidgetItem(lev))
 
 
 # =================== RoleInfo 击杀记录页 ===================
@@ -350,12 +368,8 @@ class MainWindow(QMainWindow):
                 child2.setData(0, Qt.UserRole, ('page', name, 'killrecord'))
                 top.addChild(child2)
             else:
-                # 角色存档:节点文本 = "希尔·Lv184"
-                summary = summarize_player(save['data'])
-                top.setText(0, f'👤 {name}  ({summary})')
-                child = QTreeWidgetItem(['📊 总览'])
-                child.setData(0, Qt.UserRole, ('page', name, 'overview'))
-                top.addChild(child)
+                # 角色存档:节点文本只显示名字,点击节点本身显示总览
+                top.setText(0, summarize_player(save['data']).split('·')[0])
 
             self.tree.addTopLevelItem(top)
 
@@ -371,9 +385,15 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentIndex(0)
             return
         if meta[0] == 'file':
-            # 点击文件节点:自动跳到第一个子页
-            if current.childCount() > 0:
-                self.tree.setCurrentItem(current.child(0))
+            # 点击文件节点:RoleInfo 不做特殊处理(没子节点)
+            # PlayerNN 节点直接显示总览
+            save = self.saves.get(meta[1])
+            if save is None:
+                self.stack.setCurrentIndex(0)
+                return
+            if save['kind'] == 'player':
+                self.player_page.set_data(save['data'])
+                self.stack.setCurrentIndex(1)
             else:
                 self.stack.setCurrentIndex(0)
             return
@@ -387,7 +407,19 @@ class MainWindow(QMainWindow):
                 self.player_page.set_data(save['data'])
                 self.stack.setCurrentIndex(1)
             elif sub == 'role_list':
-                self.role_list_page.set_data(save['data'])
+                # 构造 player_lookup: {'Player00': {'name': '希尔', 'lev': 184}, ...}
+                # key 用文件名去掉 .json 后缀,匹配 RoleInfo.roles 里的 ID
+                lookup = {}
+                for n, s in self.saves.items():
+                    if s['kind'] == 'player':
+                        key = n[:-5] if n.endswith('.json') else n
+                        lookup[key] = {
+                            'name': s['data'].get('name', '?'),
+                            'lev': s['data'].get('lev', '?'),
+                        }
+                self.role_list_page.set_data_with_players(
+                    save['data'].get('roles', []) or [], lookup
+                )
                 self.stack.setCurrentIndex(2)
             elif sub == 'killrecord':
                 self.killrecord_page.set_data(save['data'])

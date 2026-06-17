@@ -1,0 +1,24 @@
+# Python 编译缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 打包产物
+dist/
+build/
+*.spec
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
