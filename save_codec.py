@@ -3,6 +3,7 @@ save_codec.py - 存档编解码核心模块
 纯函数,不依赖 PyQt5,可独立单测
 """
 import json
+import re
 from typing import Optional
 
 
@@ -14,12 +15,18 @@ KEY_PLAYER = 0x77
 _KIND_ROLE_INFO = 'role_info'
 _KIND_PLAYER = 'player'
 
+# 严格正则:
+#   RoleInfo.json     — 账号全局
+#   Player<digits>.json — 角色(数字至少 1 位,不带任何后缀/副本/空格)
+_RE_PLAYER = re.compile(r'^Player\d+\.json$')
+
 
 def classify(filename: str) -> Optional[tuple]:
-    """根据文件名识别存档类型,返回 (kind, key) 或 None"""
+    """根据文件名识别存档类型,返回 (kind, key) 或 None
+    严格匹配:RoleInfo.json 或 Player<数字>.json,其他全部不识别"""
     if filename == 'RoleInfo.json':
         return (_KIND_ROLE_INFO, KEY_ROLE_INFO)
-    if filename.startswith('Player') and filename.endswith('.json'):
+    if _RE_PLAYER.match(filename):
         return (_KIND_PLAYER, KEY_PLAYER)
     return None
 

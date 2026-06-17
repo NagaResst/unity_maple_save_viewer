@@ -11,16 +11,21 @@ from save_paths import default_save_dir
 
 def collect_saves(save_dir: Path) -> list:
     """
-    扫描存档目录,返回 [RoleInfo.json(若有), Player00.json, Player01.json, ...]
+    扫描存档目录,返回严格匹配的存档
+    [RoleInfo.json(若有), Player00.json, Player01.json, ...]
     不存在的目录返回空列表
+    只识别符合 classify() 规则的文件名(过滤掉"副本"/空格/后缀等)
     """
     if not save_dir.exists() or not save_dir.is_dir():
         return []
     out = []
     ri = save_dir / 'RoleInfo.json'
-    if ri.exists():
+    if ri.exists() and classify(ri.name) is not None:
         out.append(ri)
-    out.extend(sorted(save_dir.glob('Player*.json')))
+    # glob 拿到所有 Player*.json,再用 classify 过滤(去掉副本/中文等)
+    for p in sorted(save_dir.glob('Player*.json')):
+        if classify(p.name) is not None:
+            out.append(p)
     return out
 
 
