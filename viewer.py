@@ -56,18 +56,14 @@ class PlayerOverviewPage(QWidget):
         self.lbl_exp = QLabel('-')
         self.lbl_coin = QLabel('-')
         self.lbl_bag = QLabel('-')
+        self.lbl_job = QLabel('-')
 
         form.addRow('等级:', self.lbl_lev)
         form.addRow('经验值:', self.lbl_exp)
         form.addRow('金币:', self.lbl_coin)
         form.addRow('背包物品总数:', self.lbl_bag)
+        form.addRow('职业:', self.lbl_job)
         layout.addLayout(form)
-
-        # 职业列表
-        layout.addWidget(QLabel('职业:'))
-        self.list_jobs = QListWidget()
-        self.list_jobs.setMaximumHeight(140)
-        layout.addWidget(self.list_jobs)
 
         layout.addStretch()
 
@@ -80,10 +76,11 @@ class PlayerOverviewPage(QWidget):
         self.lbl_coin.setText(f'{int(coin):,}')
         self.lbl_bag.setText(f'{bag_total(data)}')
 
-        self.list_jobs.clear()
-        for jid in data.get('jobList', []) or []:
-            item = QListWidgetItem(map_job_id(jid))
-            self.list_jobs.addItem(item)
+        job_list = data.get('jobList', []) or []
+        if job_list:
+            self.lbl_job.setText(map_job_id(max(job_list)))
+        else:
+            self.lbl_job.setText('-')
 
 
 # =================== RoleInfo 角色列表页 ===================
