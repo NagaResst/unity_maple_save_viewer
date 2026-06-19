@@ -46,16 +46,18 @@ from zip_io import (
 # =================== PlayerNN 总览页 ===================
 class PlayerOverviewPage(QWidget):
     """
-    单页:展示角色的基础属性 + 战斗属性(全部只读)
+    单页:展示角色的基础属性 + 战斗属性(全部只读,2026-06-20 横排改造)
     批 1:展示 14 个核心战斗字段 + 4 个顶层字段
     批 2:加编辑模式开关 + QLineEdit 切换可改
 
-    字段分组(2026-06-19 用户拍板):
-    - 身份区(只读):名字 / 等级 / 经验值 / 金币
-    - 战斗核心(批 2 可改):_maxHP / _maxMP / attack / magicPower / attackSpeed / defense
-    - 战斗进阶(批 2 可改):CriticalRate / CriticalDamage / percentDamage / finalDamage
-                       imdR / bdR / stanceProp / abilityPoint
-    - 四维(只读):_str / _dex / _luk / _int
+    字段布局(2x2 QGridLayout + QGroupBox):
+    - 顶部:名字(大字号)
+    - (0,0) 📋 身份信息 GroupBox(只读 3 项):等级 / 经验值 / 金币
+    - (0,1) 💪 四维属性 GroupBox(只读 4 项):_str / _dex / _luk / _int
+    - (1,0) ⚔ 战斗核心 GroupBox(批 2 可改 6 项):_maxHP / _maxMP / attack /
+                magicPower / attackSpeed / defense
+    - (1,1) 🎯 战斗进阶 GroupBox(批 2 可改 8 项):CriticalRate / CriticalDamage /
+                percentDamage / finalDamage / imdR / bdR / stanceProp / abilityPoint
     """
 
     def __init__(self, parent=None):
@@ -64,7 +66,7 @@ class PlayerOverviewPage(QWidget):
 
     def _build_ui(self):
         # 用 QScrollArea 包一层,字段多了之后窗口缩小时可滚动
-        from PyQt5.QtWidgets import QScrollArea
+        from PyQt5.QtWidgets import QScrollArea, QGroupBox, QGridLayout
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
@@ -76,36 +78,50 @@ class PlayerOverviewPage(QWidget):
         container = QWidget()
         scroll.setWidget(container)
 
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        root = QVBoxLayout(container)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
 
-        # 角色名(大字号)
+        # 角色名(大字号,占满整行)
         self.lbl_name = QLabel('-')
         font = QFont()
         font.setPointSize(20)
         font.setBold(True)
         self.lbl_name.setFont(font)
-        layout.addWidget(self.lbl_name)
+        root.addWidget(self.lbl_name)
 
-        # ====== 区域 1:身份(只读 4 项) ======
-        layout.addWidget(self._make_section_title('📋 身份信息'))
-        id_form = QFormLayout()
+        # ===== 2x2 网格布局 =====
+        # (0,0)=身份  (0,1)=四维
+        # (1,0)=战斗核心 (1,1)=战斗进阶
+        # 用 QGridLayout + QGroupBox(Q1 A 用户拍板)
+        grid = QGridLayout()
+        grid.setSpacing(12)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        grid.setRowStretch(0, 0)  # 上下两行根据内容自适应
+        grid.setRowStretch(1, 0)
+        root.addLayout(grid)
+
+        # ====== (0,0) 身份信息 ======
+        gb_id = QGroupBox('📋 身份信息')
+        id_form = QFormLayout(gb_id)
         id_form.setSpacing(8)
         id_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        id_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         self.lbl_lev = QLabel('-')
         self.lbl_exp = QLabel('-')
         self.lbl_coin = QLabel('-')
         id_form.addRow('等级:', self.lbl_lev)
         id_form.addRow('经验值:', self.lbl_exp)
         id_form.addRow('金币:', self.lbl_coin)
-        layout.addLayout(id_form)
+        grid.addWidget(gb_id, 0, 0)
 
-        # ====== 区域 2:四维(只读 4 项) ======
-        layout.addWidget(self._make_section_title('💪 四维属性'))
-        stat_form = QFormLayout()
+        # ====== (0,1) 四维属性 ======
+        gb_stat = QGroupBox('💪 四维属性')
+        stat_form = QFormLayout(gb_stat)
         stat_form.setSpacing(8)
         stat_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        stat_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         self.lbl_str = QLabel('-')
         self.lbl_dex = QLabel('-')
         self.lbl_luk = QLabel('-')
@@ -114,13 +130,14 @@ class PlayerOverviewPage(QWidget):
         stat_form.addRow('敏捷 _dex:', self.lbl_dex)
         stat_form.addRow('运气 _luk:', self.lbl_luk)
         stat_form.addRow('智力 _int:', self.lbl_int)
-        layout.addLayout(stat_form)
+        grid.addWidget(gb_stat, 0, 1)
 
-        # ====== 区域 3:战斗核心(批 2 可改 6 项) ======
-        layout.addWidget(self._make_section_title('⚔ 战斗核心'))
-        combat_form = QFormLayout()
+        # ====== (1,0) 战斗核心(6 项) ======
+        gb_combat = QGroupBox('⚔ 战斗核心')
+        combat_form = QFormLayout(gb_combat)
         combat_form.setSpacing(8)
         combat_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        combat_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         self.lbl_maxhp = QLabel('-')
         self.lbl_maxmp = QLabel('-')
         self.lbl_attack = QLabel('-')
@@ -133,13 +150,14 @@ class PlayerOverviewPage(QWidget):
         combat_form.addRow('魔法力 magicPower:', self.lbl_magic)
         combat_form.addRow('攻击速度 attackSpeed:', self.lbl_aspd)
         combat_form.addRow('防御力 defense:', self.lbl_def)
-        layout.addLayout(combat_form)
+        grid.addWidget(gb_combat, 1, 0)
 
-        # ====== 区域 4:战斗进阶(批 2 可改 8 项) ======
-        layout.addWidget(self._make_section_title('🎯 战斗进阶'))
-        adv_form = QFormLayout()
+        # ====== (1,1) 战斗进阶(8 项) ======
+        gb_adv = QGroupBox('🎯 战斗进阶')
+        adv_form = QFormLayout(gb_adv)
         adv_form.setSpacing(8)
         adv_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        adv_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         self.lbl_crit_rate = QLabel('-')
         self.lbl_crit_dmg = QLabel('-')
         self.lbl_pct_dmg = QLabel('-')
@@ -156,19 +174,9 @@ class PlayerOverviewPage(QWidget):
         adv_form.addRow('首领伤害 bdR:', self.lbl_bdr)
         adv_form.addRow('稳如泰山 stanceProp:', self.lbl_stance)
         adv_form.addRow('可用能力值 abilityPoint:', self.lbl_ap)
-        layout.addLayout(adv_form)
+        grid.addWidget(gb_adv, 1, 1)
 
-        layout.addStretch()
-
-    def _make_section_title(self, text: str) -> QLabel:
-        """生成区块标题(灰底加粗)"""
-        lbl = QLabel(text)
-        f = QFont()
-        f.setPointSize(12)
-        f.setBold(True)
-        lbl.setFont(f)
-        lbl.setStyleSheet('color: #555; padding-top: 8px;')
-        return lbl
+        root.addStretch()
 
     def set_data(self, data: dict):
         # 身份区
