@@ -21,6 +21,7 @@ from save_codec import (
     summarize_player, summarize_role_info,
 )
 from save_paths import default_save_dir
+from item_db import get_name as get_item_name, is_loaded as items_db_loaded
 from zip_io import (
     collect_saves, export_zip, import_zip_entries, read_zip_entries,
 )
@@ -28,14 +29,38 @@ from zip_io import (
 
 # =================== PlayerNN 总览页 ===================
 class PlayerOverviewPage(QWidget):
-    """单页:名称 / 等级 / 经验 / 金币 / 职业 / 背包物品总数"""
+    """
+    单页:展示角色的基础属性 + 战斗属性(全部只读)
+    批 1:展示 14 个核心战斗字段 + 4 个顶层字段
+    批 2:加编辑模式开关 + QLineEdit 切换可改
+
+    字段分组(2026-06-19 用户拍板):
+    - 身份区(只读):名字 / 等级 / 经验值 / 金币
+    - 战斗核心(批 2 可改):_maxHP / _maxMP / attack / magicPower / attackSpeed / defense
+    - 战斗进阶(批 2 可改):CriticalRate / CriticalDamage / percentDamage / finalDamage
+                       imdR / bdR / stanceProp / abilityPoint
+    - 四维(只读):_str / _dex / _luk / _int
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_ui()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        # 用 QScrollArea 包一层,字段多了之后窗口缩小时可滚动
+        from PyQt5.QtWidgets import QScrollArea
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        outer.addWidget(scroll)
+
+        container = QWidget()
+        scroll.setWidget(container)
+
+        layout = QVBoxLayout(container)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
@@ -47,40 +72,346 @@ class PlayerOverviewPage(QWidget):
         self.lbl_name.setFont(font)
         layout.addWidget(self.lbl_name)
 
-        # 表单区
-        form = QFormLayout()
-        form.setSpacing(10)
-        form.setLabelAlignment(Qt.AlignRight)
-
+        # ====== 区域 1:身份(只读 4 项) ======
+        layout.addWidget(self._make_section_title('📋 身份信息'))
+        id_form = QFormLayout()
+        id_form.setSpacing(8)
+        id_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.lbl_lev = QLabel('-')
         self.lbl_exp = QLabel('-')
         self.lbl_coin = QLabel('-')
-        self.lbl_bag = QLabel('-')
-        self.lbl_job = QLabel('-')
+        id_form.addRow('等级:', self.lbl_lev)
+        id_form.addRow('经验值:', self.lbl_exp)
+        id_form.addRow('金币:', self.lbl_coin)
+        layout.addLayout(id_form)
 
-        form.addRow('等级:', self.lbl_lev)
-        form.addRow('经验值:', self.lbl_exp)
-        form.addRow('金币:', self.lbl_coin)
-        form.addRow('背包物品总数:', self.lbl_bag)
-        form.addRow('职业:', self.lbl_job)
-        layout.addLayout(form)
+        # ====== 区域 2:四维(只读 4 项) ======
+        layout.addWidget(self._make_section_title('💪 四维属性'))
+        stat_form = QFormLayout()
+        stat_form.setSpacing(8)
+        stat_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.lbl_str = QLabel('-')
+        self.lbl_dex = QLabel('-')
+        self.lbl_luk = QLabel('-')
+        self.lbl_int = QLabel('-')
+        stat_form.addRow('力量 _str:', self.lbl_str)
+        stat_form.addRow('敏捷 _dex:', self.lbl_dex)
+        stat_form.addRow('运气 _luk:', self.lbl_luk)
+        stat_form.addRow('智力 _int:', self.lbl_int)
+        layout.addLayout(stat_form)
+
+        # ====== 区域 3:战斗核心(批 2 可改 6 项) ======
+        layout.addWidget(self._make_section_title('⚔ 战斗核心'))
+        combat_form = QFormLayout()
+        combat_form.setSpacing(8)
+        combat_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.lbl_maxhp = QLabel('-')
+        self.lbl_maxmp = QLabel('-')
+        self.lbl_attack = QLabel('-')
+        self.lbl_magic = QLabel('-')
+        self.lbl_aspd = QLabel('-')
+        self.lbl_def = QLabel('-')
+        combat_form.addRow('最大血量 _maxHP:', self.lbl_maxhp)
+        combat_form.addRow('最大魔量 _maxMP:', self.lbl_maxmp)
+        combat_form.addRow('攻击力 attack:', self.lbl_attack)
+        combat_form.addRow('魔法力 magicPower:', self.lbl_magic)
+        combat_form.addRow('攻击速度 attackSpeed:', self.lbl_aspd)
+        combat_form.addRow('防御力 defense:', self.lbl_def)
+        layout.addLayout(combat_form)
+
+        # ====== 区域 4:战斗进阶(批 2 可改 8 项) ======
+        layout.addWidget(self._make_section_title('🎯 战斗进阶'))
+        adv_form = QFormLayout()
+        adv_form.setSpacing(8)
+        adv_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.lbl_crit_rate = QLabel('-')
+        self.lbl_crit_dmg = QLabel('-')
+        self.lbl_pct_dmg = QLabel('-')
+        self.lbl_final_dmg = QLabel('-')
+        self.lbl_imdr = QLabel('-')
+        self.lbl_bdr = QLabel('-')
+        self.lbl_stance = QLabel('-')
+        self.lbl_ap = QLabel('-')
+        adv_form.addRow('暴击率 CriticalRate:', self.lbl_crit_rate)
+        adv_form.addRow('暴击伤害 CriticalDamage:', self.lbl_crit_dmg)
+        adv_form.addRow('增伤百分比 percentDamage:', self.lbl_pct_dmg)
+        adv_form.addRow('最终伤害 finalDamage:', self.lbl_final_dmg)
+        adv_form.addRow('无视防御 imdR:', self.lbl_imdr)
+        adv_form.addRow('首领伤害 bdR:', self.lbl_bdr)
+        adv_form.addRow('稳如泰山 stanceProp:', self.lbl_stance)
+        adv_form.addRow('可用能力值 abilityPoint:', self.lbl_ap)
+        layout.addLayout(adv_form)
+
+        layout.addStretch()
+
+    def _make_section_title(self, text: str) -> QLabel:
+        """生成区块标题(灰底加粗)"""
+        lbl = QLabel(text)
+        f = QFont()
+        f.setPointSize(12)
+        f.setBold(True)
+        lbl.setFont(f)
+        lbl.setStyleSheet('color: #555; padding-top: 8px;')
+        return lbl
+
+    def set_data(self, data: dict):
+        # 身份区
+        self.lbl_name.setText(str(data.get('name', '?')))
+        self.lbl_lev.setText(str(data.get('lev', '?')))
+        self.lbl_exp.setText(f'{int(data.get("currentExp", 0)):,}')
+        self.lbl_coin.setText(f'{int(data.get("coin", 0)):,}')
+
+        # 四维(只读)
+        attrs = data.get('attributes', {}) or {}
+        self.lbl_str.setText(str(attrs.get('_str', '?')))
+        self.lbl_dex.setText(str(attrs.get('_dex', '?')))
+        self.lbl_luk.setText(str(attrs.get('_luk', '?')))
+        self.lbl_int.setText(str(attrs.get('_int', '?')))
+
+        # 战斗核心 6 项
+        self.lbl_maxhp.setText(f'{int(attrs.get("_maxHP", 0)):,}')
+        self.lbl_maxmp.setText(f'{int(attrs.get("_maxMP", 0)):,}')
+        self.lbl_attack.setText(str(attrs.get('attack', '?')))
+        self.lbl_magic.setText(str(attrs.get('magicPower', '?')))
+        self.lbl_aspd.setText(str(attrs.get('attackSpeed', '?')))
+        self.lbl_def.setText(f'{int(attrs.get("defense", 0)):,}')
+
+        # 战斗进阶 8 项
+        self.lbl_crit_rate.setText(str(attrs.get('CriticalRate', '?')))
+        self.lbl_crit_dmg.setText(str(attrs.get('CriticalDamage', '?')))
+        self.lbl_pct_dmg.setText(str(attrs.get('percentDamage', '?')))
+        self.lbl_final_dmg.setText(str(attrs.get('finalDamage', '?')))
+        self.lbl_imdr.setText(str(attrs.get('imdR', '?')))
+        self.lbl_bdr.setText(str(attrs.get('bdR', '?')))
+        self.lbl_stance.setText(str(attrs.get('stanceProp', '?')))
+        self.lbl_ap.setText(str(attrs.get('abilityPoint', '?')))
+
+
+# =================== PlayerNN 背包页 ===================
+class PlayerBagPage(QWidget):
+    """
+    单页:展示角色的背包(批 1 只读,批 2 加编辑)
+
+    容器选择(Q3 A:用户拍板):
+    - equips    (可改容器 — 批 2)
+    - consumes  (可改容器 — 批 2)
+    - nowEquips (身上穿的 — 只读永久,不能改)
+
+    每个条目字段(7 列 + 1 标志):
+    - id / num / nowNum / position / star / typeLv / tuc / flags(只读)
+    - 批 2 时 num/nowNum 可改(上限 999),position 不让手动改,其他也只读
+    """
+
+    # 容器列表(显示文本 -> data key)
+    CONTAINER_OPTIONS = [
+        ('🎒 背包装备 (equips)', 'equips'),
+        ('🧪 消耗品 (consumes)', 'consumes'),
+        ('👕 身上装备 (nowEquips) 🔒', 'nowEquips'),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._data: dict | None = None
+        self._current_key: str = 'equips'
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        # 顶部:容器选择 + 长度 + 锁状态
+        top_row = QHBoxLayout()
+        top_row.addWidget(QLabel('容器:'))
+        from PyQt5.QtWidgets import QComboBox
+        self.cmb_container = QComboBox()
+        for display, key in self.CONTAINER_OPTIONS:
+            self.cmb_container.addItem(display, key)
+        self.cmb_container.currentIndexChanged.connect(self._on_container_changed)
+        top_row.addWidget(self.cmb_container)
+        self.lbl_count = QLabel('0 件')
+        top_row.addWidget(self.lbl_count)
+        top_row.addStretch()
+        self.lbl_locked = QLabel('')  # 容器只读时显示 "🔒 永久只读"
+        self.lbl_locked.setStyleSheet('color: #c00; font-weight: bold;')
+        top_row.addWidget(self.lbl_locked)
+        layout.addLayout(top_row)
+
+        # 表格(9 列:id + 物品名 + 7 字段)
+        # "物品名" 列宽设大一点,因为中文名字符长
+        self.table = QTableWidget(0, 9)
+        self.table.setHorizontalHeaderLabels([
+            'id', '物品名', 'num', 'nowNum', 'position',
+            'star', 'typeLv', 'tuc', 'flags(只读)',
+        ])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # 物品名列(列 1)用 Interactive 模式,设宽一些
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
+        self.table.setColumnWidth(0, 100)  # id 列 100px
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        layout.addWidget(self.table)
+
+        self._update_lock_label()
+
+    def _update_lock_label(self):
+        """nowEquips 是身上穿的,永久只读,显示红色提示"""
+        if self._current_key == 'nowEquips':
+            self.lbl_locked.setText('🔒 身上穿的不能改')
+        else:
+            self.lbl_locked.setText('')
+
+    def _on_container_changed(self, index: int):
+        self._current_key = self.cmb_container.itemData(index)
+        self._update_lock_label()
+        self._refresh_table()
+
+    def set_data(self, data: dict):
+        self._data = data
+        self._refresh_table()
+
+    def _refresh_table(self):
+        if self._data is None:
+            return
+        items = self._data.get(self._current_key, []) or []
+        self.table.setRowCount(len(items))
+        self.lbl_count.setText(f'{len(items)} 件')
+        for row, it in enumerate(items):
+            if not isinstance(it, dict):
+                continue
+            # star/typeLv/tuc 实际在 equipInfo 嵌套里(skill 文档 §2.2 标错,这里拍平展示)
+            # 批 2 编辑时要改 it['equipInfo']['star'] 等
+            ei = it.get('equipInfo', {}) if isinstance(it.get('equipInfo'), dict) else {}
+            item_id = str(it.get('id', ''))
+            # col 0: id
+            self.table.setItem(row, 0, QTableWidgetItem(item_id))
+            # col 1: 物品名(Q2 A:未命中只显示 ID,不崩)
+            name = get_item_name(item_id)
+            display_name = name if name else item_id  # 未命中 fallback 到 id
+            name_item = QTableWidgetItem(display_name)
+            # 已查到的物品名用正常颜色,未命中的用灰色提示(Q1/Q2 设计)
+            if name is None:
+                name_item.setForeground(Qt.gray)
+            self.table.setItem(row, 1, name_item)
+            # col 2-8: 原 7 字段
+            self.table.setItem(row, 2, QTableWidgetItem(str(it.get('num', ''))))
+            self.table.setItem(row, 3, QTableWidgetItem(str(it.get('nowNum', ''))))
+            self.table.setItem(row, 4, QTableWidgetItem(str(it.get('position', ''))))
+            self.table.setItem(row, 5, QTableWidgetItem(str(ei.get('star', ''))))
+            self.table.setItem(row, 6, QTableWidgetItem(str(ei.get('typeLv', ''))))
+            self.table.setItem(row, 7, QTableWidgetItem(str(ei.get('tuc', ''))))
+            # flags 拼接显示
+            flags = []
+            for k in ('bulletFlag', 'cantUse', 'petFlag', 'chairFlag', 'hitNumberFlag'):
+                if it.get(k):
+                    flags.append(k.replace('Flag', ''))
+            self.table.setItem(row, 8, QTableWidgetItem(','.join(flags) if flags else '-'))
+
+
+# =================== PlayerNN 技能页 ===================
+class PlayerSkillPage(QWidget):
+    """
+    单页:展示角色的技能(批 1 只读,批 2 加编辑)
+
+    数据来源:
+    - nowSkills:已学技能列表(id / level / switchFlag / type),批 2 可改 level
+    - skillPoint:6 元素数组(按 job 索引的剩余技能点),批 2 可改
+
+    设计要点:
+    - 批 1 全部只读,等用户给技能 ID→中文名映射表(设计稿 #11 B)再加中文列
+    - skillPoint 用一行 6 个 QSpinBox 展示,跟 nowSkills 表格分开两个区域
+    """
+
+    SKILL_POINT_COUNT = 6  # skillPoint 数组固定长度
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._data: dict | None = None
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        # ===== 顶部:技能点区域 =====
+        sp_section = QLabel('📊 剩余技能点 (skillPoint)')
+        f = QFont()
+        f.setBold(True)
+        f.setPointSize(11)
+        sp_section.setFont(f)
+        layout.addWidget(sp_section)
+
+        sp_hint = QLabel('按 job 索引的 6 个值,批 2 可改;level 不消耗这里(独立字段)')
+        sp_hint.setStyleSheet('color: #666; font-size: 10px;')
+        layout.addWidget(sp_hint)
+
+        # 6 个 QSpinBox 横排
+        from PyQt5.QtWidgets import QSpinBox
+        sp_row = QHBoxLayout()
+        self.skill_point_spins: list[QSpinBox] = []
+        for i in range(self.SKILL_POINT_COUNT):
+            spin = QSpinBox()
+            spin.setRange(0, 9999)
+            spin.setValue(0)
+            spin.setEnabled(False)  # 批 1 只读
+            spin.setPrefix(f'[{i}] ')
+            spin.setMinimumWidth(90)
+            self.skill_point_spins.append(spin)
+            sp_row.addWidget(spin)
+        sp_row.addStretch()
+        layout.addLayout(sp_row)
+
+        # ===== 中部:技能列表 =====
+        skill_section = QLabel('⚔ 已学技能 (nowSkills)')
+        skill_section.setFont(f)
+        layout.addWidget(skill_section)
+
+        skill_hint = QLabel('批 2 时 level 列可改(上限你给数据后定);中文名等映射表')
+        skill_hint.setStyleSheet('color: #666; font-size: 10px;')
+        layout.addWidget(skill_hint)
+
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(['id', 'level', 'switchFlag', 'type'])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        layout.addWidget(self.table)
 
         layout.addStretch()
 
     def set_data(self, data: dict):
-        self.lbl_name.setText(str(data.get('name', '?')))
-        self.lbl_lev.setText(str(data.get('lev', '?')))
-        exp = data.get('currentExp', 0)
-        self.lbl_exp.setText(f'{int(exp):,}')
-        coin = data.get('coin', 0)
-        self.lbl_coin.setText(f'{int(coin):,}')
-        self.lbl_bag.setText(f'{bag_total(data)}')
+        self._data = data
+        self._refresh_skill_point()
+        self._refresh_table()
 
-        job_list = data.get('jobList', []) or []
-        if job_list:
-            self.lbl_job.setText(map_job_id(max(job_list)))
-        else:
-            self.lbl_job.setText('-')
+    def _refresh_skill_point(self):
+        if self._data is None:
+            return
+        sp = self._data.get('skillPoint', []) or []
+        # 数组可能不足 6 个,补 0
+        for i in range(self.SKILL_POINT_COUNT):
+            val = sp[i] if i < len(sp) else 0
+            try:
+                self.skill_point_spins[i].setValue(int(val))
+            except (TypeError, ValueError):
+                self.skill_point_spins[i].setValue(0)
+
+    def _refresh_table(self):
+        if self._data is None:
+            return
+        skills = self._data.get('nowSkills', []) or []
+        self.table.setRowCount(len(skills))
+        for row, s in enumerate(skills):
+            if not isinstance(s, dict):
+                continue
+            self.table.setItem(row, 0, QTableWidgetItem(str(s.get('id', ''))))
+            self.table.setItem(row, 1, QTableWidgetItem(str(s.get('level', ''))))
+            self.table.setItem(row, 2, QTableWidgetItem(str(s.get('switchFlag', ''))))
+            self.table.setItem(row, 3, QTableWidgetItem(str(s.get('type', ''))))
 
 
 # =================== RoleInfo 角色列表页 ===================
@@ -246,6 +577,9 @@ class MainWindow(QMainWindow):
         self._build_central()
         self.setStatusBar(QStatusBar())
 
+        # 启动时加载 items.json(物品名数据库,Q1 A 方案)
+        self._load_items_json()
+
         # 启动时自动加载默认目录
         self.reload_default_dir()
 
@@ -290,9 +624,11 @@ class MainWindow(QMainWindow):
 
         # 右侧 stacked
         self.stack = QStackedWidget()
-        self.player_page = PlayerOverviewPage()
-        self.role_list_page = RoleListPage()
-        self.killrecord_page = KillRecordPage()
+        self.player_page = PlayerOverviewPage()     # index 1
+        self.player_bag_page = PlayerBagPage()       # index 4
+        self.player_skill_page = PlayerSkillPage()   # index 5
+        self.role_list_page = RoleListPage()         # index 2
+        self.killrecord_page = KillRecordPage()      # index 3
         self.empty_page = QLabel('请选择左侧节点')
         self.empty_page.setAlignment(Qt.AlignCenter)
         self.empty_page.setStyleSheet('color: gray; font-size: 14px;')
@@ -301,11 +637,48 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.player_page)           # 1
         self.stack.addWidget(self.role_list_page)        # 2
         self.stack.addWidget(self.killrecord_page)       # 3
+        self.stack.addWidget(self.player_bag_page)       # 4
+        self.stack.addWidget(self.player_skill_page)     # 5
         splitter.addWidget(self.stack)
 
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 3)
         self.setCentralWidget(splitter)
+
+    # ---------- 加载 items.json(物品名数据库) ----------
+    def _load_items_json(self):
+        """
+        启动时调用:从 items.json 加载物品名数据库。
+        三段 fallback(Q1 A):GUI 同目录 / cwd / 开发路径。
+        加载失败不弹错误框,只在状态栏提示(Q1 容错)。
+        """
+        import item_db
+        path = self._find_items_json()
+        if path is None:
+            self._items_load_msg = '未找到 items.json,物品名仅显示 ID'
+            return
+        n = item_db.load_from_json(path)
+        if n == 0 and item_db.load_error():
+            self._items_load_msg = f'物品数据加载失败: {item_db.load_error()}'
+        else:
+            self._items_load_msg = f'已加载 {n} 条物品名 (来自 {path})'
+
+    def _find_items_json(self):
+        """
+        三段 fallback 查找 items.json:
+        1. GUI 同目录(适合 pyinstaller 打包后跟 exe 一起)
+        2. 当前工作目录
+        3. 开发环境 fallback 路径
+        """
+        candidates = [
+            Path(__file__).parent / 'items.json',
+            Path.cwd() / 'items.json',
+            Path('/home/nagaresst/workspace/2026-06-17打包/items.json'),
+        ]
+        for p in candidates:
+            if p.exists():
+                return p
+        return None
 
     # ---------- 加载默认目录 ----------
     def reload_default_dir(self):
@@ -339,8 +712,11 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f'加载 {f.name} 失败: {e}')
 
         self._rebuild_tree()
+        items_msg = getattr(self, '_items_load_msg', '')
+        if items_msg:
+            items_msg = f'  |  {items_msg}'
         self.statusBar().showMessage(
-            f'已加载 {loaded} 个存档(目录: {save_dir})  时间: {datetime.now():%H:%M:%S}'
+            f'已加载 {loaded} 个存档(目录: {save_dir}){items_msg}  时间: {datetime.now():%H:%M:%S}'
         )
 
     def on_open_dir(self):
@@ -378,8 +754,18 @@ class MainWindow(QMainWindow):
                 child2.setData(0, Qt.UserRole, ('page', name, 'killrecord'))
                 top.addChild(child2)
             else:
-                # 角色存档:节点文本只显示名字,点击节点本身显示总览
+                # 角色存档:节点文本只显示名字
                 top.setText(0, summarize_player(save['data']).split('·')[0])
+                # 加 3 个子节点对应 3 个 page
+                c_overview = QTreeWidgetItem(['📊 属性'])
+                c_overview.setData(0, Qt.UserRole, ('page', name, 'overview'))
+                top.addChild(c_overview)
+                c_bag = QTreeWidgetItem(['🎒 背包'])
+                c_bag.setData(0, Qt.UserRole, ('page', name, 'bag'))
+                top.addChild(c_bag)
+                c_skill = QTreeWidgetItem(['⚔ 技能'])
+                c_skill.setData(0, Qt.UserRole, ('page', name, 'skill'))
+                top.addChild(c_skill)
 
             self.tree.addTopLevelItem(top)
 
@@ -416,6 +802,12 @@ class MainWindow(QMainWindow):
             if sub == 'overview':
                 self.player_page.set_data(save['data'])
                 self.stack.setCurrentIndex(1)
+            elif sub == 'bag':
+                self.player_bag_page.set_data(save['data'])
+                self.stack.setCurrentIndex(4)
+            elif sub == 'skill':
+                self.player_skill_page.set_data(save['data'])
+                self.stack.setCurrentIndex(5)
             elif sub == 'role_list':
                 # 构造 player_lookup: {'Player00': {'name': '希尔', 'lev': 184}, ...}
                 # key 用文件名去掉 .json 后缀,匹配 RoleInfo.roles 里的 ID

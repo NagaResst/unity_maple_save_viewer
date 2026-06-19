@@ -36,6 +36,19 @@ def decode(raw: bytes, key: int) -> dict:
     return json.loads(bytes(b ^ key for b in raw).decode('utf-8'))
 
 
+def encode(obj: dict, key: int) -> bytes:
+    """
+    把 obj 序列化为紧凑 JSON,再用 key 异或加密,返回密文字节
+
+    实现要点(skill 验证过):
+    - 紧凑序列化 separators=(',', ':') 否则体积膨胀
+    - ensure_ascii=False 保留中文(存档名"希尔"等)
+    - 写盘前必须经此函数,不能直接 str(obj).encode() + XOR
+    """
+    plain = json.dumps(obj, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    return bytes(b ^ key for b in plain)
+
+
 def map_job_id(job_id: int) -> str:
     """
     职业 ID → 字符串
