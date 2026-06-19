@@ -2,22 +2,24 @@
 item_db.py - 物品名称数据库(纯函数,无 PyQt5 依赖)
 
 职责:
-- 启动时从 items.json 加载到内存 {id: name} 字典
+- 启动时加载物品数据到内存 {id: name} 字典
 - 提供 get_name(item_id) 给 GUI 调用查中文名
 - 加载失败绝不抛异常(主功能不能因为物品数据缺失而崩)
 
-设计约束(用户 2026-06-19 拍板):
+数据来源(2026-06-19 用户拍板):
+- 用 Python 模块 item_data.py(由 gen_data.py 从 items.json 生成)
+- 直接 import,无 JSON 解析开销,git diff 可读
+
+设计约束:
 - 只加载 8 位 ID(过滤掉 3 位任务/NPC 物品)
 - 只存 {id: name} 一对字段(不加载 items.json 的 24 个完整字段,省内存)
 - 加载失败时 get_name() 返回 None,GUI 端显示 ID 占位
 - 不写回 JSON(用户规则:"不要直接以 json 形式落盘")
 """
-import json
-from pathlib import Path
 from typing import Optional
 
 
-# 内存数据库:{ 8位ID -> 中文名 }
+# 内存数据库:{ 8位ID(str) -> 中文名(str) }
 _DB: dict = {}
 
 # 加载状态标志(防止 GUI 启动时反复调)
@@ -26,41 +28,38 @@ _LOAD_ERROR: str = ''
 _LOADED_COUNT: int = 0
 
 
-def load_from_json(path: Path) -> int:
+def load_from_dict(items_dict: dict, source_name: str = '<inline>') -> int:
     """
-    从 items.json 加载到内存。
+    从 Python dict 加载(主路径,2026-06-19 新增)。
+
+    期望格式(跟 item_data.ITEMS 一致):
+        {
+            '01302000': {'NAME': '剑', 'TYPE': '1', 'EQUIPTYPE': '17'},
+            ...
+        }
 
     行为:
-    - 成功:返回加载的物品数(只算 8 位 ID),_LOADED=True
-    - 失败:返回 0,_LOADED=False,_LOAD_ERROR=错误信息
-    - 绝不抛异常(主功能容错)
+    - 成功:返回条目数,_LOADED=True
+    - 失败:返回 0,_LOADED=False,_LOAD_ERROR=错误信息(但绝不抛异常)
 
-    JSON 格式(items.json 是 list of dict):
-        [
-            {"ID": "01302000", "NAME": "剑", ...},
-            {"ID": "01302002", "NAME": "海盗剑", ...},
-            ...
-        ]
+    只采纳 8 位字符串 key + 含 NAME 字符串 value 的条目,其他跳过。
     """
     global _LOADED, _LOAD_ERROR, _LOADED_COUNT
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        if not isinstance(data, list):
-            _LOAD_ERROR = f'items.json 顶层不是 list,是 {type(data).__name__}'
+        if not isinstance(items_dict, dict):
+            _LOAD_ERROR = f'{source_name} 不是 dict,是 {type(items_dict).__name__}'
             _LOADED = False
             _LOADED_COUNT = 0
             return 0
 
         _DB.clear()
-        for it in data:
-            if not isinstance(it, dict):
+        for item_id, v in items_dict.items():
+            if not isinstance(item_id, str) or len(item_id) != 8:
                 continue
-            item_id = it.get('ID')
-            name = it.get('NAME')
-            # 只存 8 位 ID(过滤掉 3 位任务物品)
-            if isinstance(item_id, str) and len(item_id) == 8 and isinstance(name, str):
-                _DB[item_id] = name
+            if isinstance(v, dict) and isinstance(v.get('NAME'), str):
+                _DB[item_id] = v['NAME']
+            elif isinstance(v, str):  # 兼容纯字符串 dict(如测试场景)
+                _DB[item_id] = v
 
         _LOADED = True
         _LOAD_ERROR = ''

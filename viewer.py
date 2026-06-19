@@ -22,6 +22,22 @@ from save_codec import (
 )
 from save_paths import default_save_dir
 from item_db import get_name as get_item_name, is_loaded as items_db_loaded
+from skill_db import get_name as get_skill_name, is_loaded as skills_db_loaded
+# 数据来源:Python 模块(由 gen_data.py 从 JSON 生成),不是 JSON 直接读
+# 用 try/except 容错:导入失败时给个空 dict,_load_items_dict 会走容错分支
+try:
+    from item_data import ITEMS as _ITEMS_RAW
+except Exception as _e:
+    _ITEMS_RAW = {}
+    print(f'[viewer] 警告: item_data 导入失败 ({_e}),物品名 fallback 到 ID')
+try:
+    from skill_data import SKILLS as _SKILLS_RAW
+except Exception as _e:
+    _SKILLS_RAW = {}
+    print(f'[viewer] 警告: skill_data 导入失败 ({_e}),技能名 fallback 到 ID')
+# 给 _load_items_dict / _load_skills_dict 用(避免每次都重新 import)
+ITEMS = _ITEMS_RAW
+SKILLS = _SKILLS_RAW
 from zip_io import (
     collect_saves, export_zip, import_zip_entries, read_zip_entries,
 )
@@ -369,13 +385,23 @@ class PlayerSkillPage(QWidget):
         skill_section.setFont(f)
         layout.addWidget(skill_section)
 
-        skill_hint = QLabel('批 2 时 level 列可改(上限你给数据后定);中文名等映射表')
+        skill_hint = QLabel('批 2 时 level 列可改(上限你给数据后定);中文名来自 skill_data')
         skill_hint.setStyleSheet('color: #666; font-size: 10px;')
         layout.addWidget(skill_hint)
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(['id', 'level', 'switchFlag', 'type'])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # 表格:技能名(id 中文名)、id、level、switchFlag、type
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(['技能名', 'id', 'level', 'switchFlag', 'type'])
+        # 技能名列宽一些(中文长),其他列 Stretch
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
+        self.table.setColumnWidth(1, 100)  # id 列 100px
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
+        self.table.setColumnWidth(2, 70)   # level 列 70px
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)
+        self.table.setColumnWidth(3, 100)  # switchFlag 列 100px
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Interactive)
+        self.table.setColumnWidth(4, 80)   # type 列 80px
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -408,10 +434,29 @@ class PlayerSkillPage(QWidget):
         for row, s in enumerate(skills):
             if not isinstance(s, dict):
                 continue
-            self.table.setItem(row, 0, QTableWidgetItem(str(s.get('id', ''))))
-            self.table.setItem(row, 1, QTableWidgetItem(str(s.get('level', ''))))
-            self.table.setItem(row, 2, QTableWidgetItem(str(s.get('switchFlag', ''))))
-            self.table.setItem(row, 3, QTableWidgetItem(str(s.get('type', ''))))
+            sid_raw = str(s.get('id', ''))
+            # 查中文名:玩家存档 id 是字符串(可能带前导 0),需要 int() 才能匹配 skill_data 的 int key
+            # 字符串 ID(BOSS 技能)保留字符串查
+            try:
+                sid_int = int(sid_raw)
+                name = get_skill_name(sid_int)
+                if name is None:
+                    # fallback:字符串查
+                    name = get_skill_name(sid_raw)
+            except ValueError:
+                # 字符串 ID 直接查
+                name = get_skill_name(sid_raw)
+            display_name = name if name else sid_raw  # 未命中 fallback 到 id
+            # col 0: 技能名
+            name_item = QTableWidgetItem(display_name)
+            if name is None:
+                name_item.setForeground(Qt.gray)
+            self.table.setItem(row, 0, name_item)
+            # col 1-4: id / level / switchFlag / type
+            self.table.setItem(row, 1, QTableWidgetItem(sid_raw))
+            self.table.setItem(row, 2, QTableWidgetItem(str(s.get('level', ''))))
+            self.table.setItem(row, 3, QTableWidgetItem(str(s.get('switchFlag', ''))))
+            self.table.setItem(row, 4, QTableWidgetItem(str(s.get('type', ''))))
 
 
 # =================== RoleInfo 角色列表页 ===================
@@ -577,8 +622,10 @@ class MainWindow(QMainWindow):
         self._build_central()
         self.setStatusBar(QStatusBar())
 
-        # 启动时加载 items.json(物品名数据库,Q1 A 方案)
-        self._load_items_json()
+        # 启动时加载 item_data.ITEMS(物品名数据库)
+        self._load_items_dict()
+        # 启动时加载 skill_data.SKILLS(技能名数据库)
+        self._load_skills_dict()
 
         # 启动时自动加载默认目录
         self.reload_default_dir()
@@ -645,42 +692,32 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 3)
         self.setCentralWidget(splitter)
 
-    # ---------- 加载 items.json(物品名数据库) ----------
-    def _load_items_json(self):
+    # ---------- 加载物品/技能数据(2026-06-19 改为 Python 模块直接导入) ----------
+    def _load_items_dict(self):
         """
-        启动时调用:从 items.json 加载物品名数据库。
-        三段 fallback(Q1 A):GUI 同目录 / cwd / 开发路径。
-        加载失败不弹错误框,只在状态栏提示(Q1 容错)。
+        启动时调用:从 item_data.ITEMS 加载物品名数据库。
+        数据来自 Python 模块(由 gen_data.py 从 items.json 生成),无需读 JSON 文件。
+        加载失败不弹错误框,只在状态栏提示(容错)。
         """
         import item_db
-        path = self._find_items_json()
-        if path is None:
-            self._items_load_msg = '未找到 items.json,物品名仅显示 ID'
-            return
-        n = item_db.load_from_json(path)
+        n = item_db.load_from_dict(ITEMS, 'item_data.ITEMS')
         if n == 0 and item_db.load_error():
             self._items_load_msg = f'物品数据加载失败: {item_db.load_error()}'
         else:
-            self._items_load_msg = f'已加载 {n} 条物品名 (来自 {path})'
+            self._items_load_msg = f'已加载 {n} 条物品名 (item_data.ITEMS)'
 
-    def _find_items_json(self):
+    def _load_skills_dict(self):
         """
-        三段 fallback 查找 items.json:
-        1. GUI 同目录(适合 pyinstaller 打包后跟 exe 一起)
-        2. 当前工作目录
-        3. 开发环境 fallback 路径
+        启动时调用:从 skill_data.SKILLS 加载技能名数据库。
+        同物品模式,Python 模块直接导入,无需读 JSON。
         """
-        candidates = [
-            Path(__file__).parent / 'items.json',
-            Path.cwd() / 'items.json',
-            Path('/home/nagaresst/workspace/2026-06-17打包/items.json'),
-        ]
-        for p in candidates:
-            if p.exists():
-                return p
-        return None
+        import skill_db
+        n = skill_db.load_from_dict(SKILLS, 'skill_data.SKILLS')
+        if n == 0 and skill_db.load_error():
+            self._skills_load_msg = f'技能数据加载失败: {skill_db.load_error()}'
+        else:
+            self._skills_load_msg = f'已加载 {n} 条技能名 (skill_data.SKILLS)'
 
-    # ---------- 加载默认目录 ----------
     def reload_default_dir(self):
         save_dir = default_save_dir()
         files = collect_saves(save_dir)
@@ -713,10 +750,15 @@ class MainWindow(QMainWindow):
 
         self._rebuild_tree()
         items_msg = getattr(self, '_items_load_msg', '')
+        skills_msg = getattr(self, '_skills_load_msg', '')
+        extras = []
         if items_msg:
-            items_msg = f'  |  {items_msg}'
+            extras.append(items_msg)
+        if skills_msg:
+            extras.append(skills_msg)
+        extra_str = f"  |  {' / '.join(extras)}" if extras else ''
         self.statusBar().showMessage(
-            f'已加载 {loaded} 个存档(目录: {save_dir}){items_msg}  时间: {datetime.now():%H:%M:%S}'
+            f'已加载 {loaded} 个存档(目录: {save_dir}){extra_str}  时间: {datetime.now():%H:%M:%S}'
         )
 
     def on_open_dir(self):
