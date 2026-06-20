@@ -104,6 +104,8 @@ ALLOWED_TOP_PATHS = frozenset({
 
 # attributes.XXX 可改字段(白名单)
 ALLOWED_ATTR_FIELDS = frozenset({
+    # 四维(2026-06-20 改为可编辑)
+    '_str', '_dex', '_luk', '_int',
     # 战斗核心 6 项(memory 拍板 + 2026-06-20 拍板)
     '_maxHP', '_maxMP', 'attack', 'magicPower', 'attackSpeed', 'defense',
     # 战斗进阶 8 项
@@ -119,7 +121,6 @@ LOCKED_TOP_KEYS = frozenset({
 })
 
 LOCKED_ATTR_FIELDS = frozenset({
-    '_str', '_dex', '_luk', '_int',  # 四维客户端重算
     'name', 'job', 'baseJob', 'family', 'popularity',  # 顶层 attributes 的元数据
 })
 
@@ -266,6 +267,14 @@ EDITABLE_CONTAINER_FIELDS = frozenset({
     'num',      # 数量
 })
 
+EDITABLE_EQUIP_INFO_FIELDS = frozenset({
+    'star', 'typeLv',
+    'attack', 'magicPower', 'defense',
+    '_str', '_dex', '_luk', '_int',
+    '_maxHP', '_maxMP',
+    'moveSpeed', 'jumpForce',
+})
+
 
 def _is_container_edit_path(path: str) -> bool:
     """
@@ -282,6 +291,27 @@ def _is_container_edit_path(path: str) -> bool:
     if not idx_str.isdigit():
         return False
     if field not in EDITABLE_CONTAINER_FIELDS:
+        return False
+    return True
+
+
+def _is_equip_info_edit_path(path: str) -> bool:
+    """
+    判断 path 是否是合法的背包装备属性编辑路径。
+    合法格式: equips.{index}.equipInfo.{field}
+    例: equips.0.equipInfo.attack
+    """
+    parts = path.split('.')
+    if len(parts) != 4:
+        return False
+    container, idx_str, section, field = parts
+    if container != 'equips':
+        return False
+    if not idx_str.isdigit():
+        return False
+    if section != 'equipInfo':
+        return False
+    if field not in EDITABLE_EQUIP_INFO_FIELDS:
         return False
     return True
 
@@ -333,14 +363,14 @@ def validate_field(path: str, value: Any) -> None:
             )
     elif path.startswith('skillPoint.') or (path.startswith('nowSkills.') and path.endswith('.level')):
         pass  # skillPoint / nowSkills.X.level 走下面的专门格式校验
-    elif _is_container_edit_path(path):
+    elif _is_container_edit_path(path) or _is_equip_info_edit_path(path):
         pass  # 容器编辑路径(consumes.N.num 等)走下面的专门校验
     else:
         # 既不是顶层白名单,也不是 attributes.X 白名单,也不是 skillPoint/nowSkills,也不是容器编辑
         raise InvalidValueError(
             f'{path} 不在白名单(顶层: {sorted(ALLOWED_TOP_PATHS)}, '
             f'attributes: {sorted(ALLOWED_ATTR_FIELDS)}, skillPoint.X, nowSkills.X.level, '
-            f'容器: consumes/equips.X.num)'
+            f'容器: consumes.X.num / equips.X.equipInfo.<field>)'
         )
 
     if path in ('lev', 'coin', 'currentExp'):
@@ -350,8 +380,9 @@ def validate_field(path: str, value: Any) -> None:
     if path.startswith('attributes.'):
         if not isinstance(value, (int, float)):
             raise InvalidValueError(f'{path} 必须是 int 或 float,got {value!r}')
-        # HP/MP/攻击/防御保护(0 是个边界,允许 = 不做任何事)
+        # 四维/HP/MP/攻击/防御保护(0 是个边界,允许 = 不做任何事)
         if path in (
+            'attributes._str', 'attributes._dex', 'attributes._luk', 'attributes._int',
             'attributes._maxHP', 'attributes._maxMP',
             'attributes.attack', 'attributes.magicPower',
             'attributes.defense', 'attributes.attackSpeed',
@@ -384,6 +415,10 @@ def validate_field(path: str, value: Any) -> None:
         if field == 'num':
             if not isinstance(value, int) or value < 0:
                 raise InvalidValueError(f'{path} num 必须是非负 int,got {value!r}')
+
+    if _is_equip_info_edit_path(path):
+        if not isinstance(value, int) or value < 0:
+            raise InvalidValueError(f'{path} 必须是非负 int,got {value!r}')
 
 
 # ============== 批量应用 ==============

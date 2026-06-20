@@ -3,7 +3,7 @@ edit_mode_mixin.py - 共享"编辑模式"机制(2026-06-20 拍板)
 
 为 PlayerOverviewPage / PlayerBagPage 提供:
 - 顶部右侧 QCheckBox "☐ 编辑模式" 开关(E1 A)
-- 底部按钮条 "💾 保存 / ↩ 撤销 / ❌ 取消编辑模式"
+- 底部按钮条 "💾 保存 / ↩ 撤销"
 - 控件映射表 self._field_widgets: {path: QWidget} (供 save 收集)
 - 编辑状态 self._edits: list[Edit] (Edit 来自 save_editor)
 - 原始 data snapshot (用于 ↩ 撤销)
@@ -12,7 +12,6 @@ edit_mode_mixin.py - 共享"编辑模式"机制(2026-06-20 拍板)
 设计约束(2026-06-20 拍板 E1-E4):
 - E1 A: 开关在页面顶部右侧
 - E3 B: 保存时弹 QMessageBox.question(Yes/No),简单确认
-- E4 A: 取消编辑模式 = 撤销所有未保存修改 + 退出编辑模式
 - 每页独立(C6 拍板),不在 mixin 里做"全局编辑模式"
 
 使用方法:
@@ -60,7 +59,6 @@ class EditModeMixin:
         self.edit_mode_check: Optional[QCheckBox] = None
         self.btn_save: Optional[QPushButton] = None
         self.btn_undo: Optional[QPushButton] = None
-        self.btn_cancel: Optional[QPushButton] = None
         self._edit_buttons_row: Optional[QHBoxLayout] = None
 
     # ---- 子类必须实现的接口 ----
@@ -79,7 +77,7 @@ class EditModeMixin:
         top_row.addWidget(self.edit_mode_check)
         top_layout.addLayout(top_row)
 
-        # 底部行:撤销 / 取消 / 保存
+        # 底部行:撤销 / 保存
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
@@ -87,11 +85,6 @@ class EditModeMixin:
         self.btn_undo.clicked.connect(self._on_undo_clicked)
         self.btn_undo.setEnabled(False)
         btn_row.addWidget(self.btn_undo)
-
-        self.btn_cancel = QPushButton('取消编辑模式')
-        self.btn_cancel.clicked.connect(self._on_cancel_clicked)
-        self.btn_cancel.setEnabled(False)
-        btn_row.addWidget(self.btn_cancel)
 
         self.btn_save = QPushButton('保存')
         self.btn_save.clicked.connect(self._on_save_clicked)
@@ -134,7 +127,7 @@ class EditModeMixin:
             self.exit_edit_mode(force=True)
 
     def enter_edit_mode(self):
-        """进入编辑模式(E4 A 配套):不撤销"""
+        """进入编辑模式:不撤销"""
         if self.is_edit_mode:
             return
         self.is_edit_mode = True
@@ -143,7 +136,6 @@ class EditModeMixin:
             self._apply_edit_mode_to_widgets(True)
         # 同步按钮可用性
         self.btn_undo.setEnabled(False)  # 刚进入,无修改
-        self.btn_cancel.setEnabled(True)
         self.btn_save.setEnabled(False)  # 还没改
         # 状态条
         if hasattr(self, 'statusBar') and callable(self.statusBar):
@@ -170,7 +162,6 @@ class EditModeMixin:
         # 同步 UI
         self.edit_mode_check.setChecked(False)
         self.btn_undo.setEnabled(False)
-        self.btn_cancel.setEnabled(False)
         self.btn_save.setEnabled(False)
         # 清空编辑状态
         self._edits.clear()
@@ -182,10 +173,6 @@ class EditModeMixin:
         self.btn_undo.setEnabled(False)
         self.btn_save.setEnabled(False)
         self._edits.clear()
-
-    def _on_cancel_clicked(self):
-        """E4 A: 取消 = 撤销 + 退出"""
-        self.exit_edit_mode(force=True)
 
     def _on_save_clicked(self):
         """

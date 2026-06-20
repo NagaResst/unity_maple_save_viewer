@@ -55,7 +55,7 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
     字段布局(2x2 QGridLayout + QGroupBox):
     - 顶部:名字(大字号) + ⚠ 武器提示(E2 B,永远显示)
     - (0,0) 📋 身份信息 GroupBox:lev / currentExp / coin(批 2 可改)
-    - (0,1) 💪 四维属性 GroupBox:_str / _dex / _luk / _int(永远只读,客户端重算)
+    - (0,1) 💪 四维属性 GroupBox:_str / _dex / _luk / _int(可改,保存前仍受武器守卫)
     - (1,0) ⚔ 战斗核心 GroupBox:_maxHP / _maxMP / attack / magicPower / attackSpeed / defense(可改)
     - (1,1) 🎯 战斗进阶 GroupBox:CriticalRate / CriticalDamage / percentDamage / finalDamage / imdR / bdR / stanceProp / abilityPoint(可改)
     + 🔋 当前状态 GroupBox:_nowHP / _nowMP / Mastery(可改)
@@ -69,6 +69,11 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
         ('等级', 'lev', 'int', (0, 300), 0),
         ('经验值', 'currentExp', 'int', (0, 2_000_000_000), 0),
         ('金币', 'coin', 'int', (0, 2_000_000_000), 0),
+        # 四维(4)
+        ('力量 _str', '_str', 'int', (0, 2_000_000_000), 0),
+        ('敏捷 _dex', '_dex', 'int', (0, 2_000_000_000), 0),
+        ('运气 _luk', '_luk', 'int', (0, 2_000_000_000), 0),
+        ('智力 _int', '_int', 'int', (0, 2_000_000_000), 0),
         # 战斗核心(6)
         ('最大血量 _maxHP', '_maxHP', 'int', (0, 2_000_000_000), 0),
         ('最大魔量 _maxMP', '_maxMP', 'int', (0, 2_000_000_000), 0),
@@ -89,14 +94,6 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
         ('当前血量 _nowHP', '_nowHP', 'int', (0, 2_000_000_000), 0),
         ('当前魔量 _nowMP', '_nowMP', 'int', (0, 2_000_000_000), 0),
         ('熟练度 Mastery', 'Mastery', 'float', (0.0, 100.0), 0.0),
-    ]
-
-    # 锁死的四维(永远只读,客户端重算 - memory 拍板)
-    LOCKED_STAT_FIELDS = [
-        ('力量 _str', '_str'),
-        ('敏捷 _dex', '_dex'),
-        ('运气 _luk', '_luk'),
-        ('智力 _int', '_int'),
     ]
 
     def __init__(self, parent=None):
@@ -152,39 +149,33 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
         # 容器(每个 group 同时存 label + spinbox,切换时 setVisible)
         # {path: (lbl, spin)}  spin 在 kind='float' 时是 QDoubleSpinBox
         self._field_widgets = {}
-        # 四维(永远只读)的 label 字典
-        self._locked_stat_labels_dict = {}
-
         # ====== (0,0) 身份信息 ======
         gb_id, id_form = self._make_groupbox('📋 身份信息')
         for label, path, kind, rng, default in self.EDITABLE_FIELDS[:3]:
             self._add_field_row(id_form, label, path, kind, rng, default)
         grid.addWidget(gb_id, 0, 0)
 
-        # ====== (0,1) 四维属性(永远只读) ======
+        # ====== (0,1) 四维属性 ======
         gb_stat, stat_form = self._make_groupbox('💪 四维属性')
-        for label, path in self.LOCKED_STAT_FIELDS:
-            # 四维永远只读,只建 label
-            lbl = QLabel('-')
-            self._locked_stat_labels_dict[path] = lbl  # 用于 set_data
-            stat_form.addRow(f'{label}:', lbl)
+        for label, path, kind, rng, default in self.EDITABLE_FIELDS[3:7]:
+            self._add_field_row(stat_form, label, path, kind, rng, default)
         grid.addWidget(gb_stat, 0, 1)
 
         # ====== (1,0) 战斗核心(6 项) ======
         gb_combat, combat_form = self._make_groupbox('⚔ 战斗核心')
-        for label, path, kind, rng, default in self.EDITABLE_FIELDS[3:9]:
+        for label, path, kind, rng, default in self.EDITABLE_FIELDS[7:13]:
             self._add_field_row(combat_form, label, path, kind, rng, default)
         grid.addWidget(gb_combat, 1, 0)
 
         # ====== (1,1) 战斗进阶(8 项) ======
         gb_adv, adv_form = self._make_groupbox('🎯 战斗进阶')
-        for label, path, kind, rng, default in self.EDITABLE_FIELDS[9:17]:
+        for label, path, kind, rng, default in self.EDITABLE_FIELDS[13:21]:
             self._add_field_row(adv_form, label, path, kind, rng, default)
         grid.addWidget(gb_adv, 1, 1)
 
         # ====== 跨整行(2,0)+(2,1): 当前状态(3 项) ======
         gb_now, now_form = self._make_groupbox('🔋 当前状态')
-        for label, path, kind, rng, default in self.EDITABLE_FIELDS[17:]:
+        for label, path, kind, rng, default in self.EDITABLE_FIELDS[21:]:
             self._add_field_row(now_form, label, path, kind, rng, default)
         grid.addWidget(gb_now, 2, 0, 1, 2)  # 跨两列
 
@@ -237,7 +228,6 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
         for path, (lbl, spin) in self._field_widgets.items():
             lbl.setVisible(not on)
             spin.setVisible(on)
-        # 四维 label 永远只读显示
         # 武器提示永远显示(E2 B)
         self.lbl_weapon_hint.setVisible(True)
 
@@ -259,11 +249,6 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
             lbl, spin = self._field_widgets[path]
             lbl.setText(str(val))
             spin.setValue(float(val) if kind == 'float' else int(val))
-
-        # 四维(永远 label)
-        for label, path in self.LOCKED_STAT_FIELDS:
-            lbl = self._locked_stat_labels_dict[path]
-            lbl.setText(str(attrs.get(path, '?')))
 
         # 武器提示:动态显示状态
         # E2 B:永远显示提示(可读模式也显示)
@@ -418,6 +403,22 @@ class PlayerBagPage(EditModeMixin, QWidget):
         ('🎒 背包装备 (equips)', 'equips'),
         ('🧪 消耗品 (consumes)', 'consumes'),
         ('👕 身上装备 (nowEquips) 🔒', 'nowEquips'),
+    ]
+
+    EQUIP_EDITABLE_FIELDS = [
+        ('star', 'equipInfo.star', (0, 999)),
+        ('typeLv', 'equipInfo.typeLv', (0, 999)),
+        ('攻击力 attack', 'equipInfo.attack', (0, 2_000_000_000)),
+        ('魔法力 magicPower', 'equipInfo.magicPower', (0, 2_000_000_000)),
+        ('防御力 defense', 'equipInfo.defense', (0, 2_000_000_000)),
+        ('力量 _str', 'equipInfo._str', (0, 2_000_000_000)),
+        ('敏捷 _dex', 'equipInfo._dex', (0, 2_000_000_000)),
+        ('运气 _luk', 'equipInfo._luk', (0, 2_000_000_000)),
+        ('智力 _int', 'equipInfo._int', (0, 2_000_000_000)),
+        ('最大血量 _maxHP', 'equipInfo._maxHP', (0, 2_000_000_000)),
+        ('最大魔量 _maxMP', 'equipInfo._maxMP', (0, 2_000_000_000)),
+        ('移动速度 moveSpeed', 'equipInfo.moveSpeed', (0, 2_000_000_000)),
+        ('跳跃力 jumpForce', 'equipInfo.jumpForce', (0, 2_000_000_000)),
     ]
 
     def __init__(self, parent=None):
@@ -605,6 +606,7 @@ class PlayerBagPage(EditModeMixin, QWidget):
         """
         # 清理旧内容(递归处理 layout 子树)
         self._clear_detail_layout()
+        self._bag_edit_widgets = {}
 
         # Q3 C:消耗品容器走简化分支
         if self._current_key == 'consumes':
@@ -649,8 +651,10 @@ class PlayerBagPage(EditModeMixin, QWidget):
         star_form = QFormLayout()
         star_form.setSpacing(6)
         star_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        star_form.addRow('star:', QLabel(str(ei.get('star', ''))))
-        star_form.addRow('typeLv:', QLabel(str(ei.get('typeLv', ''))))
+        self._add_bag_edit_row(star_form, 'star:', 'equipInfo.star', ei.get('star', 0), (0, 999))
+        self._add_bag_edit_row(star_form, 'typeLv:', 'equipInfo.typeLv', ei.get('typeLv', 0), (0, 999))
+        if self._current_key == 'nowEquips':
+            star_form.addRow('position:', QLabel(str(item.get('position', ''))))
         star_form_w = QWidget()
         star_form_w.setLayout(star_form)
         grid.addWidget(star_form_w, 1, 0)
@@ -666,25 +670,24 @@ class PlayerBagPage(EditModeMixin, QWidget):
         attr_form = QFormLayout()
         attr_form.setSpacing(6)
         attr_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        attr_form.addRow('攻击力 attack:', QLabel(str(ei.get('attack', ''))))
-        attr_form.addRow('魔法力 magicPower:', QLabel(str(ei.get('magicPower', ''))))
-        attr_form.addRow('防御力 defense:', QLabel(str(ei.get('defense', ''))))
-        attr_form.addRow('力量 _str:', QLabel(str(ei.get('_str', ''))))
-        attr_form.addRow('敏捷 _dex:', QLabel(str(ei.get('_dex', ''))))
-        attr_form.addRow('运气 _luk:', QLabel(str(ei.get('_luk', ''))))
-        attr_form.addRow('智力 _int:', QLabel(str(ei.get('_int', ''))))
-        attr_form.addRow('最大血量 _maxHP:', QLabel(str(ei.get('_maxHP', ''))))
-        attr_form.addRow('最大魔量 _maxMP:', QLabel(str(ei.get('_maxMP', ''))))
-        attr_form.addRow('移动速度 moveSpeed:', QLabel(str(ei.get('moveSpeed', ''))))
-        attr_form.addRow('跳跃力 jumpForce:', QLabel(str(ei.get('jumpForce', ''))))
+        self._add_bag_edit_row(attr_form, '攻击力 attack:', 'equipInfo.attack', ei.get('attack', 0), (0, 2_000_000_000))
+        self._add_bag_edit_row(attr_form, '魔法力 magicPower:', 'equipInfo.magicPower', ei.get('magicPower', 0), (0, 2_000_000_000))
+        self._add_bag_edit_row(attr_form, '防御力 defense:', 'equipInfo.defense', ei.get('defense', 0), (0, 2_000_000_000))
+        self._add_bag_edit_row(attr_form, '力量 _str:', 'equipInfo._str', ei.get('_str', 0), (0, 2_000_000_000))
+        self._add_bag_edit_row(attr_form, '敏捷 _dex:', 'equipInfo._dex', ei.get('_dex', 0), (0, 2_000_000_000))
+        self._add_bag_edit_row(attr_form, '运气 _luk:', 'equipInfo._luk', ei.get('_luk', 0), (0, 2_000_000_000))
+        self._add_bag_edit_row(attr_form, '智力 _int:', 'equipInfo._int', ei.get('_int', 0), (0, 2_000_000_000))
+        self._add_bag_edit_row(attr_form, '最大血量 _maxHP:', 'equipInfo._maxHP', ei.get('_maxHP', 0), (0, 2_000_000_000))
+        self._add_bag_edit_row(attr_form, '最大魔量 _maxMP:', 'equipInfo._maxMP', ei.get('_maxMP', 0), (0, 2_000_000_000))
+        self._add_bag_edit_row(attr_form, '移动速度 moveSpeed:', 'equipInfo.moveSpeed', ei.get('moveSpeed', 0), (0, 2_000_000_000))
+        self._add_bag_edit_row(attr_form, '跳跃力 jumpForce:', 'equipInfo.jumpForce', ei.get('jumpForce', 0), (0, 2_000_000_000))
         attr_form_w = QWidget()
         attr_form_w.setLayout(attr_form)
         grid.addWidget(attr_form_w, 1, 1)
 
         old_layout.addStretch()
 
-        # 装备容器暂无编辑控件(后续扩展)
-        self._bag_edit_widgets = {}
+        self.register_field_widgets({k: spin for k, (lbl, spin) in self._bag_edit_widgets.items()})
         self._apply_edit_mode_to_widgets(self.is_edit_mode)
 
     def _render_consumable_details(self, item: dict):
@@ -696,6 +699,8 @@ class PlayerBagPage(EditModeMixin, QWidget):
         - 数量: num 值(从容器条目顶层),编辑模式下可改为 QSpinBox
         """
         from PyQt5.QtWidgets import QSpinBox
+
+        self._bag_edit_widgets = {}
 
         item_id = str(item.get('id', ''))
         name = get_item_name(item_id)
@@ -729,6 +734,7 @@ class PlayerBagPage(EditModeMixin, QWidget):
 
         # 记录编辑控件
         self._bag_edit_widgets = {'num': (num_lbl, num_spin)}
+        self.register_field_widgets({'num': num_spin})
 
         # 提示(告诉用户消耗品详情简化)
         hint = QLabel('(消耗品只显示名称和数量)')
@@ -748,6 +754,28 @@ class PlayerBagPage(EditModeMixin, QWidget):
         lbl.setFont(f)
         lbl.setStyleSheet('color: #555; padding-top: 4px;')
         return lbl
+
+    def _add_bag_edit_row(self, form, label_text: str, field_key: str, value, value_range: tuple):
+        """详情面板里加一行 label/spin 组合,供编辑模式切换。"""
+        from PyQt5.QtWidgets import QSpinBox
+
+        lbl = QLabel(str(value))
+        spin = QSpinBox()
+        spin.setRange(value_range[0], value_range[1])
+        try:
+            spin.setValue(int(value))
+        except (TypeError, ValueError):
+            spin.setValue(0)
+        spin.setVisible(False)
+
+        wrap = QWidget()
+        row = QHBoxLayout(wrap)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(lbl)
+        row.addWidget(spin)
+        row.addStretch()
+        form.addRow(label_text, wrap)
+        self._bag_edit_widgets[field_key] = (lbl, spin)
 
     # ---- EditModeMixin 接口实现 ----
 
@@ -769,7 +797,7 @@ class PlayerBagPage(EditModeMixin, QWidget):
     def _collect_edits(self):
         """
         背包页编辑:收集当前物品变更的字段。
-        目前只支持消耗品 num。
+        目前支持消耗品 num,以及 equips 容器当前装备的可见 equipInfo 属性。
         """
         if self._data is None or self._current_key == 'nowEquips':
             return []
@@ -778,8 +806,6 @@ class PlayerBagPage(EditModeMixin, QWidget):
 
         out = []
         idx = self._current_item_index
-        item = self._items_in_container[idx]
-        container = self._data.get(self._current_key, []) or []
         # 取 snapshot 原值
         attrs_snap = self._data_snapshot.get(self._current_key, []) or [] if self._data_snapshot else []
 
@@ -790,7 +816,11 @@ class PlayerBagPage(EditModeMixin, QWidget):
             edit_path = f'{self._current_key}.{idx}.{key}'
             # 与原值对比,没变就跳过
             if idx < len(attrs_snap) and isinstance(attrs_snap[idx], dict):
-                old_val = attrs_snap[idx].get(key)
+                if key.startswith('equipInfo.'):
+                    equip_info = attrs_snap[idx].get('equipInfo', {}) or {}
+                    old_val = equip_info.get(key.split('.', 1)[1]) if isinstance(equip_info, dict) else None
+                else:
+                    old_val = attrs_snap[idx].get(key)
                 if old_val is not None and val == old_val:
                     continue
                 if old_val is not None and type(val) != type(old_val):
