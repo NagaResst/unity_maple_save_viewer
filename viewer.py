@@ -18,11 +18,13 @@ from PyQt5.QtWidgets import (
 
 from save_codec import (
     bag_total, classify, decode, killrecord_stats, map_job_id,
-    summarize_player, summarize_role_info,
+    summarize_player, summarize_role_info, KEY_PLAYER,
 )
 from save_paths import default_save_dir
 from item_db import get_name as get_item_name, is_loaded as items_db_loaded
 from skill_db import get_name as get_skill_name, is_loaded as skills_db_loaded
+from edit_mode_mixin import EditModeMixin  # 批 2.2 新增
+from save_editor import Edit  # 批 2.2 _collect_edits 用
 # 数据来源:Python 模块(由 gen_data.py 从 JSON 生成),不是 JSON 直接读
 # 用 try/except 容错:导入失败时给个空 dict,_load_items_dict 会走容错分支
 try:
@@ -44,31 +46,73 @@ from zip_io import (
 
 
 # =================== PlayerNN 总览页 ===================
-class PlayerOverviewPage(QWidget):
+class PlayerOverviewPage(EditModeMixin, QWidget):
     """
-    单页:展示角色的基础属性 + 战斗属性(全部只读,2026-06-20 横排改造)
-    批 1:展示 14 个核心战斗字段 + 4 个顶层字段
-    批 2:加编辑模式开关 + QLineEdit 切换可改
+    单页:展示角色的基础属性 + 战斗属性
+    批 1:展示 14 个核心战斗字段 + 4 个顶层字段(只读 label)
+    批 2.2:加编辑模式(E1 A 开关在顶部右侧,E2 B 武器提示永远显示,E3 B 简单确认弹窗,E4 A 取消=撤销退出)
 
     字段布局(2x2 QGridLayout + QGroupBox):
-    - 顶部:名字(大字号)
-    - (0,0) 📋 身份信息 GroupBox(只读 3 项):等级 / 经验值 / 金币
-    - (0,1) 💪 四维属性 GroupBox(只读 4 项):_str / _dex / _luk / _int
-    - (1,0) ⚔ 战斗核心 GroupBox(批 2 可改 6 项):_maxHP / _maxMP / attack /
-                magicPower / attackSpeed / defense
-    - (1,1) 🎯 战斗进阶 GroupBox(批 2 可改 8 项):CriticalRate / CriticalDamage /
-                percentDamage / finalDamage / imdR / bdR / stanceProp / abilityPoint
+    - 顶部:名字(大字号) + ⚠ 武器提示(E2 B,永远显示)
+    - (0,0) 📋 身份信息 GroupBox:lev / currentExp / coin(批 2 可改)
+    - (0,1) 💪 四维属性 GroupBox:_str / _dex / _luk / _int(永远只读,客户端重算)
+    - (1,0) ⚔ 战斗核心 GroupBox:_maxHP / _maxMP / attack / magicPower / attackSpeed / defense(可改)
+    - (1,1) 🎯 战斗进阶 GroupBox:CriticalRate / CriticalDamage / percentDamage / finalDamage / imdR / bdR / stanceProp / abilityPoint(可改)
+    + 🔋 当前状态 GroupBox:_nowHP / _nowMP / Mastery(可改)
     """
 
+    # 字段元数据:(label_text, path, kind, range, default)
+    # kind: 'int' / 'float'
+    # range: (min, max) for QSpinBox,上限 2^31-1 ≈ 2.1e9
+    EDITABLE_FIELDS = [
+        # 身份区(3)
+        ('等级', 'lev', 'int', (0, 300), 0),
+        ('经验值', 'currentExp', 'int', (0, 2_000_000_000), 0),
+        ('金币', 'coin', 'int', (0, 2_000_000_000), 0),
+        # 战斗核心(6)
+        ('最大血量 _maxHP', '_maxHP', 'int', (0, 2_000_000_000), 0),
+        ('最大魔量 _maxMP', '_maxMP', 'int', (0, 2_000_000_000), 0),
+        ('攻击力 attack', 'attack', 'int', (0, 2_000_000_000), 0),
+        ('魔法力 magicPower', 'magicPower', 'int', (0, 2_000_000_000), 0),
+        ('攻击速度 attackSpeed', 'attackSpeed', 'int', (0, 1000), 0),
+        ('防御力 defense', 'defense', 'int', (0, 2_000_000_000), 0),
+        # 战斗进阶(8)
+        ('暴击率 CriticalRate', 'CriticalRate', 'int', (0, 1000), 0),
+        ('暴击伤害 CriticalDamage', 'CriticalDamage', 'int', (0, 1000), 0),
+        ('增伤百分比 percentDamage', 'percentDamage', 'int', (0, 1000), 0),
+        ('最终伤害 finalDamage', 'finalDamage', 'int', (0, 1000), 0),
+        ('无视防御 imdR', 'imdR', 'int', (0, 1000), 0),
+        ('首领伤害 bdR', 'bdR', 'int', (0, 1000), 0),
+        ('稳如泰山 stanceProp', 'stanceProp', 'int', (0, 1000), 0),
+        ('可用能力值 abilityPoint', 'abilityPoint', 'int', (0, 2_000_000_000), 0),
+        # 当前状态(3)
+        ('当前血量 _nowHP', '_nowHP', 'int', (0, 2_000_000_000), 0),
+        ('当前魔量 _nowMP', '_nowMP', 'int', (0, 2_000_000_000), 0),
+        ('熟练度 Mastery', 'Mastery', 'float', (0.0, 100.0), 0.0),
+    ]
+
+    # 锁死的四维(永远只读,客户端重算 - memory 拍板)
+    LOCKED_STAT_FIELDS = [
+        ('力量 _str', '_str'),
+        ('敏捷 _dex', '_dex'),
+        ('运气 _luk', '_luk'),
+        ('智力 _int', '_int'),
+    ]
+
     def __init__(self, parent=None):
-        super().__init__(parent)
+        QWidget.__init__(self, parent)
+        EditModeMixin.__init__(self, page_title='基础属性')
+        self._data: dict | None = None
         self._build_ui()
 
     def _build_ui(self):
         # 用 QScrollArea 包一层,字段多了之后窗口缩小时可滚动
-        from PyQt5.QtWidgets import QScrollArea, QGroupBox, QGridLayout
+        from PyQt5.QtWidgets import QScrollArea, QGroupBox, QGridLayout, QSpinBox, QDoubleSpinBox
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+
+        # EditModeMixin 的开关/按钮(E1 A 顶部右侧 + 底部按钮)
+        self._build_edit_mode_controls(outer)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -82,133 +126,244 @@ class PlayerOverviewPage(QWidget):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
 
-        # 角色名(大字号,占满整行)
+        # ===== 角色名(大字号) + 武器提示(E2 B 永远显示) =====
+        name_row = QHBoxLayout()
         self.lbl_name = QLabel('-')
         font = QFont()
         font.setPointSize(20)
         font.setBold(True)
         self.lbl_name.setFont(font)
-        root.addWidget(self.lbl_name)
+        name_row.addWidget(self.lbl_name)
+
+        # 武器提示(E2 B 永远显示,红色小字)
+        self.lbl_weapon_hint = QLabel('⚠ 修改四维和攻击力前需要脱下武器')
+        self.lbl_weapon_hint.setStyleSheet('color: #c00; font-size: 11px; padding-left: 12px;')
+        self.lbl_weapon_hint.setWordWrap(True)
+        name_row.addWidget(self.lbl_weapon_hint, 1)
+        root.addLayout(name_row)
 
         # ===== 2x2 网格布局 =====
-        # (0,0)=身份  (0,1)=四维
-        # (1,0)=战斗核心 (1,1)=战斗进阶
-        # 用 QGridLayout + QGroupBox(Q1 A 用户拍板)
         grid = QGridLayout()
         grid.setSpacing(12)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
-        grid.setRowStretch(0, 0)  # 上下两行根据内容自适应
-        grid.setRowStretch(1, 0)
         root.addLayout(grid)
 
+        # 容器(每个 group 同时存 label + spinbox,切换时 setVisible)
+        # {path: (lbl, spin)}  spin 在 kind='float' 时是 QDoubleSpinBox
+        self._field_widgets = {}
+        # 四维(永远只读)的 label 字典
+        self._locked_stat_labels_dict = {}
+
         # ====== (0,0) 身份信息 ======
-        gb_id = QGroupBox('📋 身份信息')
-        id_form = QFormLayout(gb_id)
-        id_form.setSpacing(8)
-        id_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        id_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.lbl_lev = QLabel('-')
-        self.lbl_exp = QLabel('-')
-        self.lbl_coin = QLabel('-')
-        id_form.addRow('等级:', self.lbl_lev)
-        id_form.addRow('经验值:', self.lbl_exp)
-        id_form.addRow('金币:', self.lbl_coin)
+        gb_id, id_form = self._make_groupbox('📋 身份信息')
+        for label, path, kind, rng, default in self.EDITABLE_FIELDS[:3]:
+            self._add_field_row(id_form, label, path, kind, rng, default)
         grid.addWidget(gb_id, 0, 0)
 
-        # ====== (0,1) 四维属性 ======
-        gb_stat = QGroupBox('💪 四维属性')
-        stat_form = QFormLayout(gb_stat)
-        stat_form.setSpacing(8)
-        stat_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        stat_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.lbl_str = QLabel('-')
-        self.lbl_dex = QLabel('-')
-        self.lbl_luk = QLabel('-')
-        self.lbl_int = QLabel('-')
-        stat_form.addRow('力量 _str:', self.lbl_str)
-        stat_form.addRow('敏捷 _dex:', self.lbl_dex)
-        stat_form.addRow('运气 _luk:', self.lbl_luk)
-        stat_form.addRow('智力 _int:', self.lbl_int)
+        # ====== (0,1) 四维属性(永远只读) ======
+        gb_stat, stat_form = self._make_groupbox('💪 四维属性')
+        for label, path in self.LOCKED_STAT_FIELDS:
+            # 四维永远只读,只建 label
+            lbl = QLabel('-')
+            self._locked_stat_labels_dict[path] = lbl  # 用于 set_data
+            stat_form.addRow(f'{label}:', lbl)
         grid.addWidget(gb_stat, 0, 1)
 
         # ====== (1,0) 战斗核心(6 项) ======
-        gb_combat = QGroupBox('⚔ 战斗核心')
-        combat_form = QFormLayout(gb_combat)
-        combat_form.setSpacing(8)
-        combat_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        combat_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.lbl_maxhp = QLabel('-')
-        self.lbl_maxmp = QLabel('-')
-        self.lbl_attack = QLabel('-')
-        self.lbl_magic = QLabel('-')
-        self.lbl_aspd = QLabel('-')
-        self.lbl_def = QLabel('-')
-        combat_form.addRow('最大血量 _maxHP:', self.lbl_maxhp)
-        combat_form.addRow('最大魔量 _maxMP:', self.lbl_maxmp)
-        combat_form.addRow('攻击力 attack:', self.lbl_attack)
-        combat_form.addRow('魔法力 magicPower:', self.lbl_magic)
-        combat_form.addRow('攻击速度 attackSpeed:', self.lbl_aspd)
-        combat_form.addRow('防御力 defense:', self.lbl_def)
+        gb_combat, combat_form = self._make_groupbox('⚔ 战斗核心')
+        for label, path, kind, rng, default in self.EDITABLE_FIELDS[3:9]:
+            self._add_field_row(combat_form, label, path, kind, rng, default)
         grid.addWidget(gb_combat, 1, 0)
 
         # ====== (1,1) 战斗进阶(8 项) ======
-        gb_adv = QGroupBox('🎯 战斗进阶')
-        adv_form = QFormLayout(gb_adv)
-        adv_form.setSpacing(8)
-        adv_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        adv_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.lbl_crit_rate = QLabel('-')
-        self.lbl_crit_dmg = QLabel('-')
-        self.lbl_pct_dmg = QLabel('-')
-        self.lbl_final_dmg = QLabel('-')
-        self.lbl_imdr = QLabel('-')
-        self.lbl_bdr = QLabel('-')
-        self.lbl_stance = QLabel('-')
-        self.lbl_ap = QLabel('-')
-        adv_form.addRow('暴击率 CriticalRate:', self.lbl_crit_rate)
-        adv_form.addRow('暴击伤害 CriticalDamage:', self.lbl_crit_dmg)
-        adv_form.addRow('增伤百分比 percentDamage:', self.lbl_pct_dmg)
-        adv_form.addRow('最终伤害 finalDamage:', self.lbl_final_dmg)
-        adv_form.addRow('无视防御 imdR:', self.lbl_imdr)
-        adv_form.addRow('首领伤害 bdR:', self.lbl_bdr)
-        adv_form.addRow('稳如泰山 stanceProp:', self.lbl_stance)
-        adv_form.addRow('可用能力值 abilityPoint:', self.lbl_ap)
+        gb_adv, adv_form = self._make_groupbox('🎯 战斗进阶')
+        for label, path, kind, rng, default in self.EDITABLE_FIELDS[9:17]:
+            self._add_field_row(adv_form, label, path, kind, rng, default)
         grid.addWidget(gb_adv, 1, 1)
 
-        root.addStretch()
+        # ====== 跨整行(2,0)+(2,1): 当前状态(3 项) ======
+        gb_now, now_form = self._make_groupbox('🔋 当前状态')
+        for label, path, kind, rng, default in self.EDITABLE_FIELDS[17:]:
+            self._add_field_row(now_form, label, path, kind, rng, default)
+        grid.addWidget(gb_now, 2, 0, 1, 2)  # 跨两列
+
+        # 初始:spinbox 全部隐藏(只读模式)
+        self._apply_edit_mode_to_widgets(False)
+        # 注册控件到 mixin(让 valueChanged 触发 save/undo 启用)
+        self.register_field_widgets({p: spin for p, (lbl, spin) in self._field_widgets.items()})
+
+    def _make_groupbox(self, title: str) -> tuple:
+        from PyQt5.QtWidgets import QGroupBox, QFormLayout
+        gb = QGroupBox(title)
+        form = QFormLayout(gb)
+        form.setSpacing(8)
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        return gb, form
+
+    def _add_field_row(self, form, label_text, path, kind, rng, default):
+        """加一行:同时建 label 和 spinbox,同 cell 用 setVisible 切换(只读 ↔ 编辑)。"""
+        from PyQt5.QtWidgets import QSpinBox, QDoubleSpinBox
+        lbl = QLabel('-')
+        if kind == 'float':
+            spin = QDoubleSpinBox()
+            spin.setDecimals(2)
+            spin.setSingleStep(0.05)
+        else:
+            spin = QSpinBox()
+        spin.setRange(rng[0], rng[1])
+        spin.setValue(default)
+
+        # 用 QWidget 装 {lbl, spin} 同一 cell,EditMode 切 setVisible
+        from PyQt5.QtWidgets import QWidget as _W
+        wrap = _W()
+        h = QHBoxLayout(wrap)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(lbl)
+        h.addWidget(spin)
+        h.addStretch()
+        form.addRow(f'{label_text}:', wrap)
+        # 初始:只读模式 → label 显示,spinbox 隐藏
+        spin.setVisible(False)
+        self._field_widgets[path] = (lbl, spin)
+
+    def _apply_edit_mode_to_widgets(self, on: bool):
+        """
+        EditModeMixin 调用:切换所有可改字段的 label ↔ spinbox。
+        on=True → 显示 spinbox,隐藏 label
+        on=False → 显示 label,隐藏 spinbox
+        """
+        for path, (lbl, spin) in self._field_widgets.items():
+            lbl.setVisible(not on)
+            spin.setVisible(on)
+        # 四维 label 永远只读显示
+        # 武器提示永远显示(E2 B)
+        self.lbl_weapon_hint.setVisible(True)
 
     def set_data(self, data: dict):
+        # 存 data 供 _do_save + snapshot 供撤销
+        self._data = data
+        self.take_data_snapshot(data)  # mixin 的撤销
+
         # 身份区
         self.lbl_name.setText(str(data.get('name', '?')))
-        self.lbl_lev.setText(str(data.get('lev', '?')))
-        self.lbl_exp.setText(f'{int(data.get("currentExp", 0)):,}')
-        self.lbl_coin.setText(f'{int(data.get("coin", 0)):,}')
-
-        # 四维(只读)
+        self.lbl_lev_spin = getattr(self, '_field_widgets', {}).get('lev', (None, None))[1]
+        # set label / spin 文本
         attrs = data.get('attributes', {}) or {}
-        self.lbl_str.setText(str(attrs.get('_str', '?')))
-        self.lbl_dex.setText(str(attrs.get('_dex', '?')))
-        self.lbl_luk.setText(str(attrs.get('_luk', '?')))
-        self.lbl_int.setText(str(attrs.get('_int', '?')))
+        for label, path, kind, rng, default in self.EDITABLE_FIELDS:
+            if path in ('lev', 'coin', 'currentExp'):
+                val = data.get(path, default)
+            else:
+                val = attrs.get(path, default)
+            lbl, spin = self._field_widgets[path]
+            lbl.setText(str(val))
+            spin.setValue(float(val) if kind == 'float' else int(val))
 
-        # 战斗核心 6 项
-        self.lbl_maxhp.setText(f'{int(attrs.get("_maxHP", 0)):,}')
-        self.lbl_maxmp.setText(f'{int(attrs.get("_maxMP", 0)):,}')
-        self.lbl_attack.setText(str(attrs.get('attack', '?')))
-        self.lbl_magic.setText(str(attrs.get('magicPower', '?')))
-        self.lbl_aspd.setText(str(attrs.get('attackSpeed', '?')))
-        self.lbl_def.setText(f'{int(attrs.get("defense", 0)):,}')
+        # 四维(永远 label)
+        for label, path in self.LOCKED_STAT_FIELDS:
+            lbl = self._locked_stat_labels_dict[path]
+            lbl.setText(str(attrs.get(path, '?')))
 
-        # 战斗进阶 8 项
-        self.lbl_crit_rate.setText(str(attrs.get('CriticalRate', '?')))
-        self.lbl_crit_dmg.setText(str(attrs.get('CriticalDamage', '?')))
-        self.lbl_pct_dmg.setText(str(attrs.get('percentDamage', '?')))
-        self.lbl_final_dmg.setText(str(attrs.get('finalDamage', '?')))
-        self.lbl_imdr.setText(str(attrs.get('imdR', '?')))
-        self.lbl_bdr.setText(str(attrs.get('bdR', '?')))
-        self.lbl_stance.setText(str(attrs.get('stanceProp', '?')))
-        self.lbl_ap.setText(str(attrs.get('abilityPoint', '?')))
+        # 武器提示:动态显示状态
+        # E2 B:永远显示提示(可读模式也显示)
+        # 加个小标记:穿着武器时变红+粗体
+        from save_editor import check_no_weapon_equipped
+        ok, iid = check_no_weapon_equipped(data)
+        if ok:
+            self.lbl_weapon_hint.setText('✓ 当前未穿武器,可正常修改四维和攻击力')
+            self.lbl_weapon_hint.setStyleSheet('color: #080; font-size: 11px; padding-left: 12px;')
+        else:
+            self.lbl_weapon_hint.setText(
+                f'⚠ 当前穿着武器 (itemId={iid}),修改四维和攻击力会被阻止,'
+                f'请先在游戏里脱下武器再读档回来'
+            )
+            self.lbl_weapon_hint.setStyleSheet('color: #c00; font-size: 11px; padding-left: 12px; font-weight: bold;')
+
+    def _do_save(self, edits):
+        """
+        EditModeMixin._on_save_clicked 调:把 edits 写到磁盘。
+        用 save_editor.apply_edits + write_save_atomic + backup_file。
+        """
+        if self._data is None:
+            QMessageBox.warning(self, '保存', '没有数据可保存')
+            return
+        from save_editor import (
+            apply_edits, write_save_atomic, backup_file, check_byte_diff_ok,
+            WeaponEquippedError, FieldLockedError, InvalidValueError,
+        )
+        from save_codec import KEY_PLAYER
+
+        # 1. 找 path
+        save = self._data.get('_save_meta')  # 由 MainWindow 注入
+        if save is None:
+            QMessageBox.warning(self, '保存', '找不到源文件路径')
+            return
+        path = save['path']
+        key = save.get('key', KEY_PLAYER)
+
+        # 2. 应用编辑(深拷贝,排除 _save_meta 等注入字段)
+        # _save_meta 含 PosixPath 不可 JSON 序列化,必须 pop
+        data_for_edit = {k: v for k, v in self._data.items() if k != '_save_meta'}
+        try:
+            new_data = apply_edits(data_for_edit, edits)
+        except WeaponEquippedError as e:
+            QMessageBox.warning(self, '武器未脱下', str(e))
+            return
+        except (FieldLockedError, InvalidValueError) as e:
+            QMessageBox.warning(self, '校验失败', str(e))
+            return
+
+        # 3. 备份
+        backup_file(path)
+
+        # 4. 写盘
+        try:
+            new_raw = write_save_atomic(path, new_data, key)
+        except Exception as e:
+            QMessageBox.critical(self, '写盘失败', str(e))
+            return
+
+        # 5. 字节差异校验
+        old_raw = save.get('raw')
+        if old_raw is not None:
+            ok, rate, msg = check_byte_diff_ok(old_raw, new_raw)
+            if not ok:
+                QMessageBox.warning(
+                    self, '字节差异超限',
+                    f'字节差异 {rate:.4%} 超过硬限,已写盘但请检查。\n{msg}'
+                )
+            elif rate > 0.001:
+                QMessageBox.information(
+                    self, '已保存(警告)',
+                    f'已保存 {len(edits)} 项。\n字节差异 {rate:.4%} 略超浮点容忍度,但在硬限内。'
+                )
+
+        # 6. 更新内存 data + tree 重渲
+        # 把 _save_meta 重新注入到 new_data(下次 _do_save 还要用)
+        new_data['_save_meta'] = save  # 同一个 dict 引用
+        save['data'] = new_data
+        save['raw'] = new_raw
+        self.set_data(new_data)  # 重渲 UI(重置 _data_snapshot)
+
+    def _collect_edits(self):
+        """
+        PlayerOverviewPage 专用:把 {path: (lbl, spin)} 转成 Edit 列表,
+        path 形如 'attributes.attack' / 'lev'。
+        """
+        out = []
+        for path, pair in self._field_widgets.items():
+            lbl, spin = pair
+            val = self._read_widget_value(spin)
+            if val is None:
+                continue
+            if path in ('lev', 'coin', 'currentExp'):
+                edit_path = path
+            else:
+                edit_path = f'attributes.{path}'
+            out.append(Edit(path=edit_path, value=val))
+        return out
+
 
 
 # =================== PlayerNN 背包页 ===================
