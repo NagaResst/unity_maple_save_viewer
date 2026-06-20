@@ -1153,7 +1153,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('枫叶存档查看器')
+        self.setWindowTitle('Unity冒险岛存档管理器')
         self.resize(1100, 700)
 
         # 已加载存档: {name: {'path': Path, 'kind': str, 'data': dict, 'raw': bytes}}
