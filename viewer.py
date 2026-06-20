@@ -407,14 +407,19 @@ class PlayerBagPage(QWidget):
 
     def _render_item_details(self, item: dict):
         """
-        渲染单个物品的精简 15 字段详情 + 1 个固定提示。
+        渲染单个物品的精简字段详情 + 1 个固定提示。
 
-        字段分组(2026-06-20 拍板):
-        - 基础信息: 物品名 / ID
-        - 强化: star / typeLv(合并显示,无 tuc)
-        - 战斗属性: attack / magicPower / defense / _str / _dex / _luk / _int / _maxHP / _maxMP
-        - 移动: moveSpeed / jumpForce
-        - 固定提示: "修改强化等级不影响属性" (放在强化分组下面)
+        字段分组(2026-06-20 拍板 + 6-21 升级):
+        - 基础信息: 物品名(大字标题) / ID
+        - 🔧 强化: star / typeLv + 固定提示 "⚠ 修改强化等级不影响属性"
+        - 📊 附加属性(Q1 B 合并):attack / magicPower / defense
+                                  _str / _dex / _luk / _int (四维)
+                                  _maxHP / _maxMP
+                                  moveSpeed / jumpForce
+        - 共 13 个字段(强化 2 + 附加 11)+ ID + 1 提示
+
+        中文标注:每个 label 是 "中文名 英文 key:" 格式
+        对齐:QFormLayout label 列右对齐,所有 `:` 同列,value 左对齐
         """
         ei = item.get('equipInfo', {}) if isinstance(item.get('equipInfo'), dict) else {}
         item_id = str(item.get('id', ''))
@@ -455,31 +460,24 @@ class PlayerBagPage(QWidget):
         hint.setStyleSheet('color: #c00; padding: 4px 0;')
         old_layout.addWidget(hint)
 
-        # ===== 战斗属性分组(6 项) =====
-        old_layout.addWidget(self._make_group_title('⚔ 战斗属性'))
-        combat_form = QFormLayout()
-        combat_form.setSpacing(6)
-        combat_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        combat_form.addRow('attack:', QLabel(str(ei.get('attack', ''))))
-        combat_form.addRow('magicPower:', QLabel(str(ei.get('magicPower', ''))))
-        combat_form.addRow('defense:', QLabel(str(ei.get('defense', ''))))
-        # 四维合并一行(节省垂直空间)
-        four_dim = QLabel(f"_str={ei.get('_str', '')}  _dex={ei.get('_dex', '')}  "
-                          f"_luk={ei.get('_luk', '')}  _int={ei.get('_int', '')}")
-        combat_form.addRow('四维:', four_dim)
-        # HP / MP 合并一行
-        hp_mp = QLabel(f"_maxHP={ei.get('_maxHP', '')}  _maxMP={ei.get('_maxMP', '')}")
-        combat_form.addRow('HP/MP:', hp_mp)
-        old_layout.addLayout(combat_form)
-
-        # ===== 移动分组(2 项) =====
-        old_layout.addWidget(self._make_group_title('🏃 移动'))
-        move_form = QFormLayout()
-        move_form.setSpacing(6)
-        move_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        move_form.addRow('moveSpeed:', QLabel(str(ei.get('moveSpeed', ''))))
-        move_form.addRow('jumpForce:', QLabel(str(ei.get('jumpForce', ''))))
-        old_layout.addLayout(move_form)
+        # ===== 附加属性分组(Q1 B:战斗属性 + 移动合并,Q1 加中文标注对齐) =====
+        old_layout.addWidget(self._make_group_title('📊 附加属性'))
+        attr_form = QFormLayout()
+        attr_form.setSpacing(6)
+        attr_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        # 每个字段一行: 中文名 + 英文 key + value(QFormLayout 自动对齐 label/value 列)
+        attr_form.addRow('攻击力 attack:', QLabel(str(ei.get('attack', ''))))
+        attr_form.addRow('魔法力 magicPower:', QLabel(str(ei.get('magicPower', ''))))
+        attr_form.addRow('防御力 defense:', QLabel(str(ei.get('defense', ''))))
+        attr_form.addRow('力量 _str:', QLabel(str(ei.get('_str', ''))))
+        attr_form.addRow('敏捷 _dex:', QLabel(str(ei.get('_dex', ''))))
+        attr_form.addRow('运气 _luk:', QLabel(str(ei.get('_luk', ''))))
+        attr_form.addRow('智力 _int:', QLabel(str(ei.get('_int', ''))))
+        attr_form.addRow('最大血量 _maxHP:', QLabel(str(ei.get('_maxHP', ''))))
+        attr_form.addRow('最大魔量 _maxMP:', QLabel(str(ei.get('_maxMP', ''))))
+        attr_form.addRow('移动速度 moveSpeed:', QLabel(str(ei.get('moveSpeed', ''))))
+        attr_form.addRow('跳跃力 jumpForce:', QLabel(str(ei.get('jumpForce', ''))))
+        old_layout.addLayout(attr_form)
 
         old_layout.addStretch()
 
