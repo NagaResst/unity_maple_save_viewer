@@ -214,16 +214,27 @@ class PlayerOverviewPage(QWidget):
 # =================== PlayerNN 背包页 ===================
 class PlayerBagPage(QWidget):
     """
-    单页:展示角色的背包(批 1 只读,批 2 加编辑)
+    单页:展示角色的背包详情(批 1 只读,批 2 加编辑)
 
     容器选择(Q3 A:用户拍板):
     - equips    (可改容器 — 批 2)
     - consumes  (可改容器 — 批 2)
     - nowEquips (身上穿的 — 只读永久,不能改)
 
-    每个条目字段(7 列 + 1 标志):
-    - id / num / nowNum / position / star / typeLv / tuc / flags(只读)
-    - 批 2 时 num/nowNum 可改(上限 999),position 不让手动改,其他也只读
+    UI 结构(2026-06-20 改造 2):
+    - 顶部第 1 行:容器下拉(equips/consumes/nowEquips) + 长度 + 锁定标签
+    - 顶部第 2 行:物品下拉(当前容器内所有物品,按"物品名 (id)"排序)
+    - 右下方:QScrollArea + 动态 QFormLayout,显示选中物品的 15 个字段(精简后)
+
+    字段精简(2026-06-20 用户拍板):
+    - 显示: 物品名 / id / star / typeLv / attack / magicPower / defense
+            / _str / _dex / _luk / _int / _maxHP / _maxMP
+            / moveSpeed / jumpForce + 1 个固定提示
+    - 不显示(38 个): num/nowNum/position, req_* 6 个, setItemID/allProp/bullet/type/
+            classification/attackSpeed, action/action2, pdd/bdr/igpddr/mdd,
+            fixTimes/goldenHammer/platinumHammer/knockback/bdR/imdR/mhpR/mmpR,
+            gainType/price/shopPrice/type/5 个 bool 标志
+    - tuc 替换为固定文本提示: "修改强化等级不影响属性" (Q2 A,放在强化分组下面)
     """
 
     # 容器列表(显示文本 -> data key)
@@ -237,17 +248,18 @@ class PlayerBagPage(QWidget):
         super().__init__(parent)
         self._data: dict | None = None
         self._current_key: str = 'equips'
+        self._items_in_container: list = []  # 当前容器的物品 list
         self._build_ui()
 
     def _build_ui(self):
+        from PyQt5.QtWidgets import QScrollArea, QComboBox
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        # 顶部:容器选择 + 长度 + 锁状态
+        # ===== 顶部第 1 行:容器下拉 + 长度 + 锁状态 =====
         top_row = QHBoxLayout()
         top_row.addWidget(QLabel('容器:'))
-        from PyQt5.QtWidgets import QComboBox
         self.cmb_container = QComboBox()
         for display, key in self.CONTAINER_OPTIONS:
             self.cmb_container.addItem(display, key)
@@ -261,22 +273,28 @@ class PlayerBagPage(QWidget):
         top_row.addWidget(self.lbl_locked)
         layout.addLayout(top_row)
 
-        # 表格(9 列:id + 物品名 + 7 字段)
-        # "物品名" 列宽设大一点,因为中文名字符长
-        self.table = QTableWidget(0, 9)
-        self.table.setHorizontalHeaderLabels([
-            'id', '物品名', 'num', 'nowNum', 'position',
-            'star', 'typeLv', 'tuc', 'flags(只读)',
-        ])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        # 物品名列(列 1)用 Interactive 模式,设宽一些
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.table.setColumnWidth(0, 100)  # id 列 100px
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        layout.addWidget(self.table)
+        # ===== 顶部第 2 行:物品下拉 =====
+        item_row = QHBoxLayout()
+        item_row.addWidget(QLabel('物品:'))
+        self.cmb_item = QComboBox()
+        self.cmb_item.setMinimumWidth(400)
+        self.cmb_item.currentIndexChanged.connect(self._on_item_changed)
+        item_row.addWidget(self.cmb_item, 1)
+        layout.addLayout(item_row)
+
+        # ===== 详情面板(滚动,动态生成 QFormLayout) =====
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        layout.addWidget(self.scroll, 1)
+
+        # 详情面板内的 QWidget(每次切物品重建 form_layout)
+        self.detail_widget = QWidget()
+        self.scroll.setWidget(self.detail_widget)
+        # 默认空 form 布局,后续 _render_item_details 重建
+        self.detail_widget.setLayout(QVBoxLayout())
+        self.detail_widget.layout().setContentsMargins(12, 12, 12, 12)
+        self.detail_widget.layout().setSpacing(8)
 
         self._update_lock_label()
 
@@ -290,48 +308,190 @@ class PlayerBagPage(QWidget):
     def _on_container_changed(self, index: int):
         self._current_key = self.cmb_container.itemData(index)
         self._update_lock_label()
-        self._refresh_table()
+        # 重建物品下拉(用户已选 Q3 A:保留两个下拉)
+        self._refresh_item_dropdown()
+
+    def _on_item_changed(self, index: int):
+        # 找到选中的 item dict 并渲染详情
+        if 0 <= index < len(self._items_in_container):
+            item = self._items_in_container[index]
+            self._render_item_details(item)
 
     def set_data(self, data: dict):
         self._data = data
-        self._refresh_table()
+        # 注意:先设置数据,再重建物品下拉(_refresh_item_dropdown 会读 _data)
+        self._refresh_item_dropdown()
 
-    def _refresh_table(self):
+    def _refresh_item_dropdown(self):
+        """从当前容器里读所有物品,填充到物品下拉,默认选第一个"""
         if self._data is None:
+            self._items_in_container = []
+            self.cmb_item.clear()
+            self._render_empty('(无数据)')
             return
+
         items = self._data.get(self._current_key, []) or []
-        self.table.setRowCount(len(items))
-        self.lbl_count.setText(f'{len(items)} 件')
-        for row, it in enumerate(items):
-            if not isinstance(it, dict):
-                continue
-            # star/typeLv/tuc 实际在 equipInfo 嵌套里(skill 文档 §2.2 标错,这里拍平展示)
-            # 批 2 编辑时要改 it['equipInfo']['star'] 等
-            ei = it.get('equipInfo', {}) if isinstance(it.get('equipInfo'), dict) else {}
+        self._items_in_container = [it for it in items if isinstance(it, dict)]
+        self.lbl_count.setText(f'{len(self._items_in_container)} 件')
+
+        # 暂存当前选中,避免触发 currentIndexChanged 时旧 index 无效
+        self.cmb_item.blockSignals(True)
+        self.cmb_item.clear()
+
+        if not self._items_in_container:
+            self.cmb_item.addItem('(该容器为空)', None)
+            self.cmb_item.setEnabled(False)
+            self.cmb_item.blockSignals(False)
+            self._render_empty('该容器为空')
+            return
+
+        self.cmb_item.setEnabled(True)
+        for it in self._items_in_container:
             item_id = str(it.get('id', ''))
-            # col 0: id
-            self.table.setItem(row, 0, QTableWidgetItem(item_id))
-            # col 1: 物品名(Q2 A:未命中只显示 ID,不崩)
             name = get_item_name(item_id)
-            display_name = name if name else item_id  # 未命中 fallback 到 id
-            name_item = QTableWidgetItem(display_name)
-            # 已查到的物品名用正常颜色,未命中的用灰色提示(Q1/Q2 设计)
-            if name is None:
-                name_item.setForeground(Qt.gray)
-            self.table.setItem(row, 1, name_item)
-            # col 2-8: 原 7 字段
-            self.table.setItem(row, 2, QTableWidgetItem(str(it.get('num', ''))))
-            self.table.setItem(row, 3, QTableWidgetItem(str(it.get('nowNum', ''))))
-            self.table.setItem(row, 4, QTableWidgetItem(str(it.get('position', ''))))
-            self.table.setItem(row, 5, QTableWidgetItem(str(ei.get('star', ''))))
-            self.table.setItem(row, 6, QTableWidgetItem(str(ei.get('typeLv', ''))))
-            self.table.setItem(row, 7, QTableWidgetItem(str(ei.get('tuc', ''))))
-            # flags 拼接显示
-            flags = []
-            for k in ('bulletFlag', 'cantUse', 'petFlag', 'chairFlag', 'hitNumberFlag'):
-                if it.get(k):
-                    flags.append(k.replace('Flag', ''))
-            self.table.setItem(row, 8, QTableWidgetItem(','.join(flags) if flags else '-'))
+            display_name = name if name else item_id  # 未命中 fallback 到 id(Q1 A)
+            self.cmb_item.addItem(f'{display_name} ({item_id})', item_id)
+        # 默认选第一个
+        self.cmb_item.setCurrentIndex(0)
+        self.cmb_item.blockSignals(False)
+        # 主动触发一次渲染
+        self._on_item_changed(0)
+
+    def _clear_detail_layout(self):
+        """
+        清理详情面板的所有子节点(QWidget + QLayout 都递归删除)。
+
+        之前的实现只处理 takeAt(0).widget() = QWidget 的情况,
+        但 _render_item_details 把多个 QFormLayout addWidget 到 QVBoxLayout,
+        takeAt 取出的是 layout,要递归处理 layout 的 children。
+        """
+        layout = self.detail_widget.layout()
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            if item is None:
+                break
+            # 可能是 widget 或 layout
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+                continue
+            sub_layout = item.layout()
+            if sub_layout is not None:
+                # 递归清理子 layout 的内容
+                self._recursive_clear_layout(sub_layout)
+                sub_layout.setParent(None)
+
+    def _recursive_clear_layout(self, layout):
+        """递归清空一个 layout 及其所有子 layout 的 widgets/layouts"""
+        while layout.count():
+            item = layout.takeAt(0)
+            if item is None:
+                break
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+                continue
+            sub_layout = item.layout()
+            if sub_layout is not None:
+                self._recursive_clear_layout(sub_layout)
+                sub_layout.setParent(None)
+
+    def _render_empty(self, msg: str):
+        """详情面板显示占位文本(空容器 / 无数据)"""
+        self._clear_detail_layout()
+        self.detail_widget.layout().addWidget(QLabel(msg))
+
+    def _render_item_details(self, item: dict):
+        """
+        渲染单个物品的精简 15 字段详情 + 1 个固定提示。
+
+        字段分组(2026-06-20 拍板):
+        - 基础信息: 物品名 / ID
+        - 强化: star / typeLv(合并显示,无 tuc)
+        - 战斗属性: attack / magicPower / defense / _str / _dex / _luk / _int / _maxHP / _maxMP
+        - 移动: moveSpeed / jumpForce
+        - 固定提示: "修改强化等级不影响属性" (放在强化分组下面)
+        """
+        ei = item.get('equipInfo', {}) if isinstance(item.get('equipInfo'), dict) else {}
+        item_id = str(item.get('id', ''))
+        name = get_item_name(item_id)
+        display_name = name if name else item_id  # 未命中 fallback
+
+        # 清理旧内容(递归处理 layout 子树)
+        self._clear_detail_layout()
+        old_layout = self.detail_widget.layout()
+
+        # ===== 标题(物品名 大字号) =====
+        title = QLabel(display_name)
+        f = QFont()
+        f.setPointSize(16)
+        f.setBold(True)
+        title.setFont(f)
+        old_layout.addWidget(title)
+
+        # ===== 基础信息(物品名 + ID) =====
+        # 物品名已在标题展示,基础信息只显示 ID
+        id_form = QFormLayout()
+        id_form.setSpacing(6)
+        id_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        id_form.addRow('ID:', QLabel(item_id))
+        old_layout.addLayout(id_form)
+
+        # ===== 强化分组(star + typeLv,Q2 A:加固定提示) =====
+        # 强化 分组标题
+        old_layout.addWidget(self._make_group_title('🔧 强化'))
+        star_form = QFormLayout()
+        star_form.setSpacing(6)
+        star_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        star_form.addRow('star:', QLabel(str(ei.get('star', ''))))
+        star_form.addRow('typeLv:', QLabel(str(ei.get('typeLv', ''))))
+        old_layout.addLayout(star_form)
+        # Q2 A:固定提示
+        hint = QLabel('⚠ 修改强化等级不影响属性')
+        hint.setStyleSheet('color: #c00; padding: 4px 0;')
+        old_layout.addWidget(hint)
+
+        # ===== 战斗属性分组(6 项) =====
+        old_layout.addWidget(self._make_group_title('⚔ 战斗属性'))
+        combat_form = QFormLayout()
+        combat_form.setSpacing(6)
+        combat_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        combat_form.addRow('attack:', QLabel(str(ei.get('attack', ''))))
+        combat_form.addRow('magicPower:', QLabel(str(ei.get('magicPower', ''))))
+        combat_form.addRow('defense:', QLabel(str(ei.get('defense', ''))))
+        # 四维合并一行(节省垂直空间)
+        four_dim = QLabel(f"_str={ei.get('_str', '')}  _dex={ei.get('_dex', '')}  "
+                          f"_luk={ei.get('_luk', '')}  _int={ei.get('_int', '')}")
+        combat_form.addRow('四维:', four_dim)
+        # HP / MP 合并一行
+        hp_mp = QLabel(f"_maxHP={ei.get('_maxHP', '')}  _maxMP={ei.get('_maxMP', '')}")
+        combat_form.addRow('HP/MP:', hp_mp)
+        old_layout.addLayout(combat_form)
+
+        # ===== 移动分组(2 项) =====
+        old_layout.addWidget(self._make_group_title('🏃 移动'))
+        move_form = QFormLayout()
+        move_form.setSpacing(6)
+        move_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        move_form.addRow('moveSpeed:', QLabel(str(ei.get('moveSpeed', ''))))
+        move_form.addRow('jumpForce:', QLabel(str(ei.get('jumpForce', ''))))
+        old_layout.addLayout(move_form)
+
+        old_layout.addStretch()
+
+    def _make_group_title(self, text: str) -> QLabel:
+        """分组标题(灰底加粗,小一号的 emoji)"""
+        lbl = QLabel(text)
+        f = QFont()
+        f.setPointSize(11)
+        f.setBold(True)
+        lbl.setFont(f)
+        lbl.setStyleSheet('color: #555; padding-top: 4px;')
+        return lbl
 
 
 # =================== PlayerNN 技能页 ===================
