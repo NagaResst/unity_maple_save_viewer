@@ -13,8 +13,6 @@ save_editor.py - 存档编辑核心模块(纯函数,不依赖 PyQt5)
   path 支持:
     - 'lev' / 'coin' / 'currentExp'  (顶层)
     - 'attributes._maxHP' / 'attributes.attack'  (点路径)
-    - 'skillPoint.3'  (list 索引)
-    - 'nowSkills.5.level'  (list 元素字段)
 - 现在只支持 batch 编辑,不做事务
 
 设计约束(用户 2026-06-20 拍板):
@@ -145,8 +143,6 @@ LOCKED_TOP_PATH_PREFIXES = (
     'attributes.suit',
     'attributes.panelOptions',
 )
-
-# skillPoint / nowSkills 走专门的格式校验(P0 #1 修复),不走白名单
 
 # 编辑四维/攻击力时需要先脱武器(用户 2026-06-20 拍板)
 # 严格匹配:_str/_dex/_luk/_int 全部四维,以及顶层 attack(attributes.attack)
@@ -354,6 +350,38 @@ def check_no_weapon_equipped(
     return True, None
 
 
+def add_equip_to_bag(data: dict, item_id: str, num: int = 1) -> dict:
+    """
+    向 equips 容器新增一件装备,返回深拷贝后的新 data。
+
+    规则:
+    - item_id 必须是 8 位装备 ID
+    - position 由程序自动分配,且不得与当前 equips 中已有 position 冲突
+    - 优先使用外部模板库,缺失时退回到 item_data 生成的最小装备结构
+    """
+    if not isinstance(item_id, str) or len(item_id) != 8:
+        raise InvalidValueError(f'装备 ID 必须是 8 位字符串,got {item_id!r}')
+    if not isinstance(num, int) or num <= 0:
+        raise InvalidValueError(f'装备数量必须是正整数,got {num!r}')
+
+    from item_templates import make_item_from_template, make_minimal_equip, next_available_position
+
+    new_data = copy.deepcopy(data)
+    equips = new_data.setdefault('equips', [])
+    if not isinstance(equips, list):
+        raise InvalidPathError(f'equips 必须是 list,实际是 {type(equips).__name__}')
+
+    new_item = make_item_from_template(item_id, num=num)
+    if new_item is None:
+        new_item = make_minimal_equip(item_id, num=num)
+    if new_item is None:
+        raise InvalidValueError(f'未知装备 ID 或该物品不是装备: {item_id}')
+
+    new_item['position'] = next_available_position(equips)
+    equips.append(new_item)
+    return new_data
+
+
 # ============== 单字段校验 ==============
 
 def validate_field(path: str, value: Any) -> None:
@@ -376,15 +404,13 @@ def validate_field(path: str, value: Any) -> None:
             raise InvalidValueError(
                 f'{path} 不在白名单,attributes 可改字段: {sorted(ALLOWED_ATTR_FIELDS)}'
             )
-    elif path.startswith('skillPoint.') or (path.startswith('nowSkills.') and path.endswith('.level')):
-        pass  # skillPoint / nowSkills.X.level 走下面的专门格式校验
     elif _is_container_edit_path(path) or _is_equip_info_edit_path(path):
         pass  # 容器编辑路径(consumes.N.num 等)走下面的专门校验
     else:
-        # 既不是顶层白名单,也不是 attributes.X 白名单,也不是 skillPoint/nowSkills,也不是容器编辑
+        # 既不是顶层白名单,也不是 attributes.X 白名单,也不是容器编辑
         raise InvalidValueError(
             f'{path} 不在白名单(顶层: {sorted(ALLOWED_TOP_PATHS)}, '
-            f'attributes: {sorted(ALLOWED_ATTR_FIELDS)}, skillPoint.X, nowSkills.X.level, '
+            f'attributes: {sorted(ALLOWED_ATTR_FIELDS)}, '
             f'容器: consumes.X.num / equips.X.equipInfo.<field>)'
         )
 
@@ -403,25 +429,6 @@ def validate_field(path: str, value: Any) -> None:
             'attributes.defense', 'attributes.attackSpeed',
         ) and value < 0:
             raise InvalidValueError(f'{path} 不能为负')
-
-    # ⚠ P0 #1 修复:加括号修正优先级 (A or B) and C,不再让 nowSkills.0 漏过校验
-    # 同时拆分支,理清 "skillPoint.X" 和 "nowSkills.X.level" 两条规则的边界
-    if path.startswith('skillPoint.'):
-        # skillPoint.X 必须是非负 int,X 必须是数字
-        last = path.split('.')[-1]
-        if not last.isdigit():
-            raise InvalidPathError(f'skillPoint 索引必须为数字: {path!r}')
-        if not isinstance(value, int) or value < 0:
-            raise InvalidValueError(f'{path} 必须是非负 int,got {value!r}')
-    elif path.startswith('nowSkills.') and path.endswith('.level'):
-        # nowSkills.X.level X 必须是数字,value 必须是非负 int 且 ≤ 30
-        middle = path.split('.')[-2]
-        if not middle.isdigit():
-            raise InvalidPathError(f'nowSkills 索引必须为数字: {path!r}')
-        if not isinstance(value, int) or value < 0:
-            raise InvalidValueError(f'{path} 必须是非负 int,got {value!r}')
-        if value > 30:
-            raise InvalidValueError(f'技能等级不能超过 30,got {value}')
 
     # 容器编辑路径值校验
     if _is_container_edit_path(path):

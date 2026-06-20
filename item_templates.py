@@ -15,6 +15,11 @@ import json
 from pathlib import Path
 from typing import Optional
 
+try:
+    from item_data import ITEMS as _ITEMS_RAW
+except Exception:
+    _ITEMS_RAW = {}
+
 
 # 内存模板 dict: { item_id(str 8位) -> template_dict }
 _TEMPLATES: dict = {}
@@ -135,6 +140,40 @@ def make_item_from_template(item_id: str, num: int = 1, slot_max: int = 999) -> 
     else:
         out['equipInfo'] = dict(_EQUIP_INFO_BLANK)
     return out
+
+
+def make_minimal_equip(item_id: str, num: int = 1, slot_max: int = 999) -> Optional[dict]:
+    """
+    当外部模板库未提供数据时,根据 item_data 生成一件最小可用装备。
+
+    约束:
+    - 只接受 item_data 里 TYPE == '1' 的装备 ID
+    - position 仍然由 caller 后续自动分配
+    """
+    meta = _ITEMS_RAW.get(item_id, {}) if isinstance(_ITEMS_RAW, dict) else {}
+    if not isinstance(meta, dict) or str(meta.get('TYPE', '')) != '1':
+        return None
+    if num < 0:
+        raise ValueError(f'num 不能为负: {num}')
+    if num > slot_max:
+        raise ValueError(f'num 超过上限 {slot_max}: {num}')
+
+    return {
+        'id': item_id,
+        'num': num,
+        'nowNum': 0,
+        'position': -1,
+        'gainType': 0,
+        'price': 0,
+        'shopPrice': 0,
+        'type': 3,
+        'bulletFlag': False,
+        'cantUse': False,
+        'petFlag': False,
+        'chairFlag': False,
+        'hitNumberFlag': False,
+        'equipInfo': dict(_EQUIP_INFO_BLANK),
+    }
 
 
 def next_available_position(container: list) -> int:

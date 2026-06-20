@@ -446,6 +446,9 @@ class PlayerBagPage(EditModeMixin, QWidget):
         top_row.addWidget(self.cmb_container)
         self.lbl_count = QLabel('0 件')
         top_row.addWidget(self.lbl_count)
+        self.btn_add_equip = QPushButton('添加装备')
+        self.btn_add_equip.clicked.connect(self.on_add_equip)
+        top_row.addWidget(self.btn_add_equip)
         top_row.addStretch()
         self.lbl_locked = QLabel('')  # 容器只读时显示 "🔒 永久只读"
         self.lbl_locked.setStyleSheet('color: #c00; font-weight: bold;')
@@ -483,6 +486,7 @@ class PlayerBagPage(EditModeMixin, QWidget):
             self.lbl_locked.setText('🔒 身上穿的不能改')
         else:
             self.lbl_locked.setText('')
+        self.btn_add_equip.setEnabled(self._current_key == 'equips' and self._data is not None)
 
     def _on_container_changed(self, index: int):
         self._current_key = self.cmb_container.itemData(index)
@@ -500,6 +504,7 @@ class PlayerBagPage(EditModeMixin, QWidget):
     def set_data(self, data: dict):
         self._data = data
         self.take_data_snapshot(data)
+        self._update_lock_label()
         # 注意:先设置数据,再重建物品下拉(_refresh_item_dropdown 会读 _data)
         self._refresh_item_dropdown()
 
@@ -585,6 +590,121 @@ class PlayerBagPage(EditModeMixin, QWidget):
         """详情面板显示占位文本(空容器 / 无数据)"""
         self._clear_detail_layout()
         self.detail_widget.layout().addWidget(QLabel(msg))
+
+    def _resolve_equip_choice(self, combo) -> str | None:
+        """从可编辑下拉里解析出最终选中的装备 ID。"""
+        idx = combo.currentIndex()
+        if idx >= 0 and combo.currentText().strip() == combo.itemText(idx).strip():
+            data = combo.itemData(idx)
+            return str(data) if data is not None else None
+
+        typed = combo.currentText().strip()
+        if len(typed) == 8 and typed.isdigit():
+            meta = ITEMS.get(typed, {}) if isinstance(ITEMS, dict) else {}
+            if isinstance(meta, dict) and str(meta.get('TYPE', '')) == '1':
+                return typed
+        return None
+
+    def _choose_equip_id(self) -> str | None:
+        """弹出一个可输入搜索文字的下拉选择框,返回装备 ID。"""
+        from PyQt5.QtWidgets import QComboBox, QCompleter
+
+        equip_items = []
+        if isinstance(ITEMS, dict):
+            for item_id, meta in ITEMS.items():
+                if isinstance(meta, dict) and str(meta.get('TYPE', '')) == '1':
+                    equip_items.append((str(meta.get('NAME') or item_id), item_id))
+        equip_items.sort(key=lambda item: (item[0], item[1]))
+        if not equip_items:
+            QMessageBox.warning(self, '添加装备', '当前没有可选的装备数据')
+            return None
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle('选择装备')
+        dlg.resize(560, 140)
+        layout = QVBoxLayout(dlg)
+
+        hint = QLabel('输入装备名称或 8 位 ID 搜索,然后从下拉建议中选择:')
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.setInsertPolicy(QComboBox.NoInsert)
+        combo.setMaxVisibleItems(20)
+        for item_name, item_id in equip_items:
+            combo.addItem(f'{item_name} ({item_id})', item_id)
+
+        completer = combo.completer()
+        if completer is not None:
+            completer.setCaseSensitivity(Qt.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchContains)
+            completer.setCompletionMode(QCompleter.PopupCompletion)
+        if combo.lineEdit() is not None:
+            combo.lineEdit().setPlaceholderText('例如: 命运斗拳 / 01472288')
+            combo.lineEdit().selectAll()
+        layout.addWidget(combo)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText('添加')
+        buttons.button(QDialogButtonBox.Cancel).setText('取消')
+        ok_btn = buttons.button(QDialogButtonBox.Ok)
+
+        def _refresh_ok_state(*args):
+            ok_btn.setEnabled(self._resolve_equip_choice(combo) is not None)
+
+        combo.currentIndexChanged.connect(_refresh_ok_state)
+        combo.editTextChanged.connect(_refresh_ok_state)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        _refresh_ok_state()
+
+        if dlg.exec_() != QDialog.Accepted:
+            return None
+        return self._resolve_equip_choice(combo)
+
+    def on_add_equip(self):
+        """最小可用版:下拉选择装备,自动加到 equips 并分配不冲突的 position。"""
+        if self._data is None:
+            QMessageBox.warning(self, '添加装备', '没有数据可操作')
+            return
+        if self._current_key != 'equips':
+            QMessageBox.information(self, '添加装备', '当前只支持添加到背包装备 equips')
+            return
+
+        item_id = self._choose_equip_id()
+        if not item_id:
+            return
+        meta = ITEMS.get(item_id, {}) if isinstance(ITEMS, dict) else {}
+        if not isinstance(meta, dict) or str(meta.get('TYPE', '')) != '1':
+            QMessageBox.warning(self, '添加装备', f'无效装备 ID 或该物品不是装备: {item_id}')
+            return
+
+        item_name = meta.get('NAME') or item_id
+        reply = QMessageBox.question(
+            self,
+            '确认添加',
+            f'确认添加装备\n\n{item_name} ({item_id})\n\nposition 将自动分配且不与现有背包装备重复。',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        from save_editor import add_equip_to_bag
+
+        data_for_edit = {k: v for k, v in self._data.items() if k != '_save_meta'}
+        try:
+            new_data = add_equip_to_bag(data_for_edit, item_id)
+        except Exception as e:
+            QMessageBox.warning(self, '添加装备失败', str(e))
+            return
+
+        new_item = (new_data.get('equips', []) or [])[-1] if new_data.get('equips') else None
+        position = new_item.get('position') if isinstance(new_item, dict) else '?'
+        if self._persist_bag_data(new_data):
+            QMessageBox.information(self, '添加装备', f'已添加 {item_name} ({item_id})\nposition={position}')
 
     def _render_item_details(self, item: dict):
         """
@@ -866,17 +986,7 @@ class PlayerBagPage(EditModeMixin, QWidget):
         if self._data is None:
             QMessageBox.warning(self, '保存', '没有数据可保存')
             return
-        from save_editor import (
-            apply_edits, write_save_atomic, backup_file, check_byte_diff_ok,
-        )
-        from save_codec import KEY_PLAYER
-
-        save = self._data.get('_save_meta')
-        if save is None:
-            QMessageBox.warning(self, '保存', '找不到源文件路径')
-            return
-        path = save['path']
-        key = save.get('key', KEY_PLAYER)
+        from save_editor import apply_edits
 
         data_for_edit = {k: v for k, v in self._data.items() if k != '_save_meta'}
         try:
@@ -885,12 +995,29 @@ class PlayerBagPage(EditModeMixin, QWidget):
             QMessageBox.warning(self, '校验失败', str(e))
             return
 
+        self._persist_bag_data(new_data)
+
+    def _persist_bag_data(self, new_data: dict) -> bool:
+        """把背包页构造好的新 data 写盘并刷新内存。"""
+        if self._data is None:
+            QMessageBox.warning(self, '保存', '没有数据可保存')
+            return False
+        from save_editor import write_save_atomic, backup_file, check_byte_diff_ok
+        from save_codec import KEY_PLAYER
+
+        save = self._data.get('_save_meta')
+        if save is None:
+            QMessageBox.warning(self, '保存', '找不到源文件路径')
+            return False
+        path = save['path']
+        key = save.get('key', KEY_PLAYER)
+
         backup_file(path)
         try:
             new_raw = write_save_atomic(path, new_data, key)
         except Exception as e:
             QMessageBox.critical(self, '写盘失败', str(e))
-            return
+            return False
 
         old_raw = save.get('raw')
         if old_raw is not None:
@@ -902,20 +1029,21 @@ class PlayerBagPage(EditModeMixin, QWidget):
         save['data'] = new_data
         save['raw'] = new_raw
         self.set_data(new_data)
+        return True
 
 
 # =================== PlayerNN 技能页 ===================
 class PlayerSkillPage(QWidget):
     """
-    单页:展示角色的技能(批 1 只读,批 2 加编辑)
+    单页:展示角色的技能(只读)
 
     数据来源:
-    - nowSkills:已学技能列表(id / level / switchFlag / type),批 2 可改 level
-    - skillPoint:6 元素数组(按 job 索引的剩余技能点),批 2 可改
+    - nowSkills:已学技能列表(id / level / switchFlag / type)
+    - skillPoint:6 元素数组(按 job 索引的剩余技能点)
 
     设计要点:
-    - 批 1 全部只读,等用户给技能 ID→中文名映射表(设计稿 #11 B)再加中文列
-    - skillPoint 用一行 6 个 QSpinBox 展示,跟 nowSkills 表格分开两个区域
+    - 全部只读
+    - skillPoint 用一行标签展示,跟 nowSkills 表格分开两个区域
     """
 
     SKILL_POINT_COUNT = 6  # skillPoint 数组固定长度
@@ -938,23 +1066,20 @@ class PlayerSkillPage(QWidget):
         sp_section.setFont(f)
         layout.addWidget(sp_section)
 
-        sp_hint = QLabel('按 job 索引的 6 个值,批 2 可改;level 不消耗这里(独立字段)')
+        sp_hint = QLabel('按 job 索引的 6 个值,只读显示')
         sp_hint.setStyleSheet('color: #666; font-size: 10px;')
         layout.addWidget(sp_hint)
 
-        # 6 个 QSpinBox 横排
-        from PyQt5.QtWidgets import QSpinBox
+        # 6 个标签横排
         sp_row = QHBoxLayout()
-        self.skill_point_spins: list[QSpinBox] = []
+        self.skill_point_labels: list[QLabel] = []
         for i in range(self.SKILL_POINT_COUNT):
-            spin = QSpinBox()
-            spin.setRange(0, 9999)
-            spin.setValue(0)
-            spin.setEnabled(False)  # 批 1 只读
-            spin.setPrefix(f'[{i}] ')
-            spin.setMinimumWidth(90)
-            self.skill_point_spins.append(spin)
-            sp_row.addWidget(spin)
+            lbl = QLabel(f'[{i}] 0')
+            lbl.setMinimumWidth(90)
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setStyleSheet('border: 1px solid #ccc; padding: 4px 6px; border-radius: 4px;')
+            self.skill_point_labels.append(lbl)
+            sp_row.addWidget(lbl)
         sp_row.addStretch()
         layout.addLayout(sp_row)
 
@@ -963,7 +1088,7 @@ class PlayerSkillPage(QWidget):
         skill_section.setFont(f)
         layout.addWidget(skill_section)
 
-        skill_hint = QLabel('批 2 时 level 列可改(上限你给数据后定);中文名来自 skill_data')
+        skill_hint = QLabel('只读显示技能名、等级、开关状态和类型;中文名来自 skill_data')
         skill_hint.setStyleSheet('color: #666; font-size: 10px;')
         layout.addWidget(skill_hint)
 
@@ -1000,9 +1125,9 @@ class PlayerSkillPage(QWidget):
         for i in range(self.SKILL_POINT_COUNT):
             val = sp[i] if i < len(sp) else 0
             try:
-                self.skill_point_spins[i].setValue(int(val))
+                self.skill_point_labels[i].setText(f'[{i}] {int(val)}')
             except (TypeError, ValueError):
-                self.skill_point_spins[i].setValue(0)
+                self.skill_point_labels[i].setText(f'[{i}] 0')
 
     def _refresh_table(self):
         if self._data is None:
