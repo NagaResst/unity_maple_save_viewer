@@ -22,7 +22,6 @@ from save_codec import (
 )
 from save_paths import default_save_dir
 from item_db import get_name as get_item_name, is_loaded as items_db_loaded
-from skill_db import get_name as get_skill_name, is_loaded as skills_db_loaded
 from edit_mode_mixin import EditModeMixin  # 批 2.2 新增
 from save_editor import Edit  # 批 2.2 _collect_edits 用
 # 数据来源:Python 模块(由 gen_data.py 从 JSON 生成),不是 JSON 直接读
@@ -32,14 +31,8 @@ try:
 except Exception as _e:
     _ITEMS_RAW = {}
     print(f'[viewer] 警告: item_data 导入失败 ({_e}),物品名 fallback 到 ID')
-try:
-    from skill_data import SKILLS as _SKILLS_RAW
-except Exception as _e:
-    _SKILLS_RAW = {}
-    print(f'[viewer] 警告: skill_data 导入失败 ({_e}),技能名 fallback 到 ID')
-# 给 _load_items_dict / _load_skills_dict 用(避免每次都重新 import)
+# 给 _load_items_dict 用(避免每次都重新 import)
 ITEMS = _ITEMS_RAW
-SKILLS = _SKILLS_RAW
 from zip_io import (
     collect_saves, export_zip, import_zip_entries, read_zip_entries,
 )
@@ -263,7 +256,7 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
             QMessageBox.warning(self, '保存', '没有数据可保存')
             return
         from save_editor import (
-            apply_edits, write_save_atomic, backup_file, check_byte_diff_ok,
+            apply_edits, write_save_atomic, backup_file,
             WeaponEquippedError, FieldLockedError, InvalidValueError,
         )
         from save_codec import KEY_PLAYER
@@ -298,22 +291,7 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
             QMessageBox.critical(self, '写盘失败', str(e))
             return
 
-        # 5. 字节差异校验
-        old_raw = save.get('raw')
-        if old_raw is not None:
-            ok, rate, msg = check_byte_diff_ok(old_raw, new_raw)
-            if not ok:
-                QMessageBox.warning(
-                    self, '字节差异超限',
-                    f'字节差异 {rate:.4%} 超过硬限,已写盘但请检查。\n{msg}'
-                )
-            elif rate > 0.001:
-                QMessageBox.information(
-                    self, '已保存(警告)',
-                    f'已保存 {len(edits)} 项。\n字节差异 {rate:.4%} 略超浮点容忍度,但在硬限内。'
-                )
-
-        # 6. 更新内存 data + tree 重渲
+        # 5. 更新内存 data + tree 重渲
         # 把 _save_meta 重新注入到 new_data(下次 _do_save 还要用)
         new_data['_save_meta'] = save  # 同一个 dict 引用
         save['data'] = new_data
@@ -1002,7 +980,7 @@ class PlayerBagPage(EditModeMixin, QWidget):
         if self._data is None:
             QMessageBox.warning(self, '保存', '没有数据可保存')
             return False
-        from save_editor import write_save_atomic, backup_file, check_byte_diff_ok
+        from save_editor import write_save_atomic, backup_file
         from save_codec import KEY_PLAYER
 
         save = self._data.get('_save_meta')
@@ -1019,148 +997,11 @@ class PlayerBagPage(EditModeMixin, QWidget):
             QMessageBox.critical(self, '写盘失败', str(e))
             return False
 
-        old_raw = save.get('raw')
-        if old_raw is not None:
-            ok, rate, msg = check_byte_diff_ok(old_raw, new_raw)
-            if not ok:
-                QMessageBox.warning(self, '字节差异超限', f'字节差异 {rate:.4%} 超过硬限。\n{msg}')
-
         new_data['_save_meta'] = save
         save['data'] = new_data
         save['raw'] = new_raw
         self.set_data(new_data)
         return True
-
-
-# =================== PlayerNN 技能页 ===================
-class PlayerSkillPage(QWidget):
-    """
-    单页:展示角色的技能(只读)
-
-    数据来源:
-    - nowSkills:已学技能列表(id / level / switchFlag / type)
-    - skillPoint:6 元素数组(按 job 索引的剩余技能点)
-
-    设计要点:
-    - 全部只读
-    - skillPoint 用一行标签展示,跟 nowSkills 表格分开两个区域
-    """
-
-    SKILL_POINT_COUNT = 6  # skillPoint 数组固定长度
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._data: dict | None = None
-        self._build_ui()
-
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
-
-        # ===== 顶部:技能点区域 =====
-        sp_section = QLabel('📊 剩余技能点 (skillPoint)')
-        f = QFont()
-        f.setBold(True)
-        f.setPointSize(11)
-        sp_section.setFont(f)
-        layout.addWidget(sp_section)
-
-        sp_hint = QLabel('按 job 索引的 6 个值,只读显示')
-        sp_hint.setStyleSheet('color: #666; font-size: 10px;')
-        layout.addWidget(sp_hint)
-
-        # 6 个标签横排
-        sp_row = QHBoxLayout()
-        self.skill_point_labels: list[QLabel] = []
-        for i in range(self.SKILL_POINT_COUNT):
-            lbl = QLabel(f'[{i}] 0')
-            lbl.setMinimumWidth(90)
-            lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet('border: 1px solid #ccc; padding: 4px 6px; border-radius: 4px;')
-            self.skill_point_labels.append(lbl)
-            sp_row.addWidget(lbl)
-        sp_row.addStretch()
-        layout.addLayout(sp_row)
-
-        # ===== 中部:技能列表 =====
-        skill_section = QLabel('⚔ 已学技能 (nowSkills)')
-        skill_section.setFont(f)
-        layout.addWidget(skill_section)
-
-        skill_hint = QLabel('只读显示技能名、等级、开关状态和类型;中文名来自 skill_data')
-        skill_hint.setStyleSheet('color: #666; font-size: 10px;')
-        layout.addWidget(skill_hint)
-
-        # 表格:技能名(id 中文名)、id、level、switchFlag、type
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(['技能名', 'id', 'level', 'switchFlag', 'type'])
-        # 技能名列宽一些(中文长),其他列 Stretch
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.table.setColumnWidth(1, 100)  # id 列 100px
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
-        self.table.setColumnWidth(2, 70)   # level 列 70px
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)
-        self.table.setColumnWidth(3, 100)  # switchFlag 列 100px
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Interactive)
-        self.table.setColumnWidth(4, 80)   # type 列 80px
-        self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        layout.addWidget(self.table)
-
-        layout.addStretch()
-
-    def set_data(self, data: dict):
-        self._data = data
-        self._refresh_skill_point()
-        self._refresh_table()
-
-    def _refresh_skill_point(self):
-        if self._data is None:
-            return
-        sp = self._data.get('skillPoint', []) or []
-        # 数组可能不足 6 个,补 0
-        for i in range(self.SKILL_POINT_COUNT):
-            val = sp[i] if i < len(sp) else 0
-            try:
-                self.skill_point_labels[i].setText(f'[{i}] {int(val)}')
-            except (TypeError, ValueError):
-                self.skill_point_labels[i].setText(f'[{i}] 0')
-
-    def _refresh_table(self):
-        if self._data is None:
-            return
-        skills = self._data.get('nowSkills', []) or []
-        self.table.setRowCount(len(skills))
-        for row, s in enumerate(skills):
-            if not isinstance(s, dict):
-                continue
-            sid_raw = str(s.get('id', ''))
-            # 查中文名:玩家存档 id 是字符串(可能带前导 0),需要 int() 才能匹配 skill_data 的 int key
-            # 字符串 ID(BOSS 技能)保留字符串查
-            try:
-                sid_int = int(sid_raw)
-                name = get_skill_name(sid_int)
-                if name is None:
-                    # fallback:字符串查
-                    name = get_skill_name(sid_raw)
-            except ValueError:
-                # 字符串 ID 直接查
-                name = get_skill_name(sid_raw)
-            display_name = name if name else sid_raw  # 未命中 fallback 到 id
-            # col 0: 技能名
-            name_item = QTableWidgetItem(display_name)
-            if name is None:
-                name_item.setForeground(Qt.gray)
-            self.table.setItem(row, 0, name_item)
-            # col 1-4: id / level / switchFlag / type
-            self.table.setItem(row, 1, QTableWidgetItem(sid_raw))
-            self.table.setItem(row, 2, QTableWidgetItem(str(s.get('level', ''))))
-            self.table.setItem(row, 3, QTableWidgetItem(str(s.get('switchFlag', ''))))
-            self.table.setItem(row, 4, QTableWidgetItem(str(s.get('type', ''))))
-
 
 # =================== RoleInfo 角色列表页 ===================
 class RoleListPage(QWidget):
@@ -1327,8 +1168,6 @@ class MainWindow(QMainWindow):
 
         # 启动时加载 item_data.ITEMS(物品名数据库)
         self._load_items_dict()
-        # 启动时加载 skill_data.SKILLS(技能名数据库)
-        self._load_skills_dict()
 
         # 启动时自动加载默认目录
         self.reload_default_dir()
@@ -1376,7 +1215,6 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.player_page = PlayerOverviewPage()     # index 1
         self.player_bag_page = PlayerBagPage()       # index 4
-        self.player_skill_page = PlayerSkillPage()   # index 5
         self.role_list_page = RoleListPage()         # index 2
         self.killrecord_page = KillRecordPage()      # index 3
         self.empty_page = QLabel('请选择左侧节点')
@@ -1388,7 +1226,6 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.role_list_page)        # 2
         self.stack.addWidget(self.killrecord_page)       # 3
         self.stack.addWidget(self.player_bag_page)       # 4
-        self.stack.addWidget(self.player_skill_page)     # 5
         splitter.addWidget(self.stack)
 
         splitter.setStretchFactor(0, 1)
@@ -1408,18 +1245,6 @@ class MainWindow(QMainWindow):
             self._items_load_msg = f'物品数据加载失败: {item_db.load_error()}'
         else:
             self._items_load_msg = f'已加载 {n} 条物品名 (item_data.ITEMS)'
-
-    def _load_skills_dict(self):
-        """
-        启动时调用:从 skill_data.SKILLS 加载技能名数据库。
-        同物品模式,Python 模块直接导入,无需读 JSON。
-        """
-        import skill_db
-        n = skill_db.load_from_dict(SKILLS, 'skill_data.SKILLS')
-        if n == 0 and skill_db.load_error():
-            self._skills_load_msg = f'技能数据加载失败: {skill_db.load_error()}'
-        else:
-            self._skills_load_msg = f'已加载 {n} 条技能名 (skill_data.SKILLS)'
 
     def reload_default_dir(self):
         save_dir = default_save_dir()
@@ -1455,12 +1280,9 @@ class MainWindow(QMainWindow):
 
         self._rebuild_tree()
         items_msg = getattr(self, '_items_load_msg', '')
-        skills_msg = getattr(self, '_skills_load_msg', '')
         extras = []
         if items_msg:
             extras.append(items_msg)
-        if skills_msg:
-            extras.append(skills_msg)
         extra_str = f"  |  {' / '.join(extras)}" if extras else ''
         self.statusBar().showMessage(
             f'已加载 {loaded} 个存档(目录: {save_dir}){extra_str}  时间: {datetime.now():%H:%M:%S}'
@@ -1510,9 +1332,6 @@ class MainWindow(QMainWindow):
                 c_bag = QTreeWidgetItem(['🎒 背包'])
                 c_bag.setData(0, Qt.UserRole, ('page', name, 'bag'))
                 top.addChild(c_bag)
-                c_skill = QTreeWidgetItem(['⚔ 技能'])
-                c_skill.setData(0, Qt.UserRole, ('page', name, 'skill'))
-                top.addChild(c_skill)
 
             self.tree.addTopLevelItem(top)
 
@@ -1552,9 +1371,6 @@ class MainWindow(QMainWindow):
             elif sub == 'bag':
                 self.player_bag_page.set_data(save['data'])
                 self.stack.setCurrentIndex(4)
-            elif sub == 'skill':
-                self.player_skill_page.set_data(save['data'])
-                self.stack.setCurrentIndex(5)
             elif sub == 'role_list':
                 # 构造 player_lookup: {'Player00': {'name': '希尔', 'lev': 184}, ...}
                 # key 用文件名去掉 .json 后缀,匹配 RoleInfo.roles 里的 ID
