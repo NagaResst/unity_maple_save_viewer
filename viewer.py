@@ -58,7 +58,6 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
     - (0,1) 💪 四维属性 GroupBox:_str / _dex / _luk / _int(可改,保存前仍受武器守卫)
     - (1,0) ⚔ 战斗核心 GroupBox:_maxHP / _maxMP / attack / magicPower / attackSpeed / defense(可改)
     - (1,1) 🎯 战斗进阶 GroupBox:CriticalRate / CriticalDamage / percentDamage / finalDamage / imdR / bdR / stanceProp / abilityPoint(可改)
-    + 🔋 当前状态 GroupBox:_nowHP / _nowMP / Mastery(可改)
     """
 
     # 字段元数据:(label_text, path, kind, range, default)
@@ -90,10 +89,6 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
         ('首领伤害 bdR', 'bdR', 'int', (0, 1000), 0),
         ('稳如泰山 stanceProp', 'stanceProp', 'int', (0, 1000), 0),
         ('可用能力值 abilityPoint', 'abilityPoint', 'int', (0, 2_000_000_000), 0),
-        # 当前状态(3)
-        ('当前血量 _nowHP', '_nowHP', 'int', (0, 2_000_000_000), 0),
-        ('当前魔量 _nowMP', '_nowMP', 'int', (0, 2_000_000_000), 0),
-        ('熟练度 Mastery', 'Mastery', 'float', (0.0, 100.0), 0.0),
     ]
 
     def __init__(self, parent=None):
@@ -132,9 +127,9 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
         self.lbl_name.setFont(font)
         name_row.addWidget(self.lbl_name)
 
-        # 武器提示(E2 B 永远显示,红色小字)
+        # 武器提示(E2 B 永远显示)
         self.lbl_weapon_hint = QLabel('⚠ 修改四维和攻击力前需要脱下武器')
-        self.lbl_weapon_hint.setStyleSheet('color: #c00; font-size: 11px; padding-left: 12px;')
+        self.lbl_weapon_hint.setStyleSheet('color: #c00; font-size: 15px; font-weight: 600; padding-left: 12px;')
         self.lbl_weapon_hint.setWordWrap(True)
         name_row.addWidget(self.lbl_weapon_hint, 1)
         root.addLayout(name_row)
@@ -172,12 +167,6 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
         for label, path, kind, rng, default in self.EDITABLE_FIELDS[13:21]:
             self._add_field_row(adv_form, label, path, kind, rng, default)
         grid.addWidget(gb_adv, 1, 1)
-
-        # ====== 跨整行(2,0)+(2,1): 当前状态(3 项) ======
-        gb_now, now_form = self._make_groupbox('🔋 当前状态')
-        for label, path, kind, rng, default in self.EDITABLE_FIELDS[21:]:
-            self._add_field_row(now_form, label, path, kind, rng, default)
-        grid.addWidget(gb_now, 2, 0, 1, 2)  # 跨两列
 
         # 初始:spinbox 全部隐藏(只读模式)
         self._apply_edit_mode_to_widgets(False)
@@ -257,13 +246,13 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
         ok, iid = check_no_weapon_equipped(data)
         if ok:
             self.lbl_weapon_hint.setText('✓ 当前未穿武器,可正常修改四维和攻击力')
-            self.lbl_weapon_hint.setStyleSheet('color: #080; font-size: 11px; padding-left: 12px;')
+            self.lbl_weapon_hint.setStyleSheet('color: #080; font-size: 15px; font-weight: 600; padding-left: 12px;')
         else:
             self.lbl_weapon_hint.setText(
                 f'⚠ 当前穿着武器 (itemId={iid}),修改四维和攻击力会被阻止,'
                 f'请先在游戏里脱下武器再读档回来'
             )
-            self.lbl_weapon_hint.setStyleSheet('color: #c00; font-size: 11px; padding-left: 12px; font-weight: bold;')
+            self.lbl_weapon_hint.setStyleSheet('color: #c00; font-size: 15px; font-weight: bold; padding-left: 12px;')
 
     def _do_save(self, edits):
         """
