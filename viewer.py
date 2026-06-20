@@ -221,10 +221,14 @@ class PlayerBagPage(QWidget):
     - consumes  (可改容器 — 批 2)
     - nowEquips (身上穿的 — 只读永久,不能改)
 
-    UI 结构(2026-06-20 改造 2):
+    UI 结构(2026-06-20 改造 2 + 6-21 升级):
     - 顶部第 1 行:容器下拉(equips/consumes/nowEquips) + 长度 + 锁定标签
     - 顶部第 2 行:物品下拉(当前容器内所有物品,按"物品名 (id)"排序)
-    - 右下方:QScrollArea + 动态 QFormLayout,显示选中物品的 15 个字段(精简后)
+    - 右下方:QScrollArea + 动态 layout,显示选中物品的详情
+
+    详情面板分支(2026-06-21 拍板):
+    - consumes 容器:Q2 简化面板,只显示物品名 + 数量
+    - equips / nowEquips 容器:Q1 B 横排,左列强化+提示 / 右列附加属性
 
     字段精简(2026-06-20 用户拍板):
     - 显示: 物品名 / id / star / typeLv / attack / magicPower / defense
@@ -409,25 +413,29 @@ class PlayerBagPage(QWidget):
         """
         渲染单个物品的精简字段详情 + 1 个固定提示。
 
-        字段分组(2026-06-20 拍板 + 6-21 升级):
-        - 基础信息: 物品名(大字标题) / ID
-        - 🔧 强化: star / typeLv + 固定提示 "⚠ 修改强化等级不影响属性"
-        - 📊 附加属性(Q1 B 合并):attack / magicPower / defense
-                                  _str / _dex / _luk / _int (四维)
-                                  _maxHP / _maxMP
-                                  moveSpeed / jumpForce
-        - 共 13 个字段(强化 2 + 附加 11)+ ID + 1 提示
+        字段分支(2026-06-21 拍板):
+        - consumes 容器(消耗品):走 _render_consumable_details,简化面板
+          (Q2: 物品名 + 数量就够了,不再显示强化/附加属性)
+        - equips / nowEquips 容器(装备):走下方,显示:
+          - 基础信息: 物品名(大字标题) / ID
+          - 🔧 强化 + 📊 附加属性 横排(Q1 B:2x2 网格,左列强化+提示 / 右列附加属性)
+          - 固定提示 ⚠ 修改强化等级不影响属性(Q4 A:放在强化分组下面)
 
-        中文标注:每个 label 是 "中文名 英文 key:" 格式
-        对齐:QFormLayout label 列右对齐,所有 `:` 同列,value 左对齐
+        Q3 C 判断依据:容器名 == 'consumes'
         """
+        # 清理旧内容(递归处理 layout 子树)
+        self._clear_detail_layout()
+
+        # Q3 C:消耗品容器走简化分支
+        if self._current_key == 'consumes':
+            self._render_consumable_details(item)
+            return
+
         ei = item.get('equipInfo', {}) if isinstance(item.get('equipInfo'), dict) else {}
         item_id = str(item.get('id', ''))
         name = get_item_name(item_id)
         display_name = name if name else item_id  # 未命中 fallback
 
-        # 清理旧内容(递归处理 layout 子树)
-        self._clear_detail_layout()
         old_layout = self.detail_widget.layout()
 
         # ===== 标题(物品名 大字号) =====
@@ -446,26 +454,38 @@ class PlayerBagPage(QWidget):
         id_form.addRow('ID:', QLabel(item_id))
         old_layout.addLayout(id_form)
 
-        # ===== 强化分组(star + typeLv,Q2 A:加固定提示) =====
-        # 强化 分组标题
-        old_layout.addWidget(self._make_group_title('🔧 强化'))
+        # ===== Q1 B:强化 + 附加属性 横排(2x2 QGridLayout) =====
+        # (0,0)=强化 标题     (0,1)=附加属性 标题
+        # (1,0)=强化 字段     (1,1)=附加属性 字段
+        from PyQt5.QtWidgets import QGridLayout
+        grid = QGridLayout()
+        grid.setSpacing(12)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 2)  # 附加属性 11 字段多,给 2 倍宽度
+        old_layout.addLayout(grid)
+
+        # --- 左列(0,0)+(1,0):强化 + 提示 ---
+        grid.addWidget(self._make_group_title('🔧 强化'), 0, 0)
         star_form = QFormLayout()
         star_form.setSpacing(6)
         star_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         star_form.addRow('star:', QLabel(str(ei.get('star', ''))))
         star_form.addRow('typeLv:', QLabel(str(ei.get('typeLv', ''))))
-        old_layout.addLayout(star_form)
-        # Q2 A:固定提示
+        star_form_w = QWidget()
+        star_form_w.setLayout(star_form)
+        grid.addWidget(star_form_w, 1, 0)
+        # Q4 A:固定提示放在强化分组下面
         hint = QLabel('⚠ 修改强化等级不影响属性')
         hint.setStyleSheet('color: #c00; padding: 4px 0;')
-        old_layout.addWidget(hint)
+        hint.setWordWrap(True)
+        # 提示放在强化字段下面,加到强化列的 layout 容器里
+        star_form_w.layout().addWidget(hint)
 
-        # ===== 附加属性分组(Q1 B:战斗属性 + 移动合并,Q1 加中文标注对齐) =====
-        old_layout.addWidget(self._make_group_title('📊 附加属性'))
+        # --- 右列(0,1)+(1,1):附加属性 标题 + 11 字段 ---
+        grid.addWidget(self._make_group_title('📊 附加属性'), 0, 1)
         attr_form = QFormLayout()
         attr_form.setSpacing(6)
         attr_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        # 每个字段一行: 中文名 + 英文 key + value(QFormLayout 自动对齐 label/value 列)
         attr_form.addRow('攻击力 attack:', QLabel(str(ei.get('attack', ''))))
         attr_form.addRow('魔法力 magicPower:', QLabel(str(ei.get('magicPower', ''))))
         attr_form.addRow('防御力 defense:', QLabel(str(ei.get('defense', ''))))
@@ -477,7 +497,46 @@ class PlayerBagPage(QWidget):
         attr_form.addRow('最大魔量 _maxMP:', QLabel(str(ei.get('_maxMP', ''))))
         attr_form.addRow('移动速度 moveSpeed:', QLabel(str(ei.get('moveSpeed', ''))))
         attr_form.addRow('跳跃力 jumpForce:', QLabel(str(ei.get('jumpForce', ''))))
-        old_layout.addLayout(attr_form)
+        attr_form_w = QWidget()
+        attr_form_w.setLayout(attr_form)
+        grid.addWidget(attr_form_w, 1, 1)
+
+        old_layout.addStretch()
+
+    def _render_consumable_details(self, item: dict):
+        """
+        消耗品简化详情面板(Q2:物品名 + 数量就够了)。
+
+        只显示:
+        - 物品名(大字标题)
+        - 数量: num 值(从容器条目顶层)
+        """
+        item_id = str(item.get('id', ''))
+        name = get_item_name(item_id)
+        display_name = name if name else item_id  # 未命中 fallback
+        num = item.get('num') or 0  # None / 缺失 / 0 都安全显示成 0
+
+        old_layout = self.detail_widget.layout()
+
+        # 标题(物品名 大字号)
+        title = QLabel(display_name)
+        f = QFont()
+        f.setPointSize(20)
+        f.setBold(True)
+        title.setFont(f)
+        old_layout.addWidget(title)
+
+        # 数量(大字,显眼)
+        num_lbl = QLabel(f'数量: {num}')
+        fn = QFont()
+        fn.setPointSize(14)
+        num_lbl.setFont(fn)
+        old_layout.addWidget(num_lbl)
+
+        # 提示(告诉用户消耗品详情简化)
+        hint = QLabel('(消耗品只显示名称和数量)')
+        hint.setStyleSheet('color: #888; padding-top: 8px;')
+        old_layout.addWidget(hint)
 
         old_layout.addStretch()
 
