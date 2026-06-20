@@ -258,6 +258,34 @@ def _is_locked_path(path: str) -> bool:
     return False
 
 
+# 可编辑的容器及字段
+EDITABLE_CONTAINERS = frozenset({
+    'consumes', 'equips', 'others', 'specials', 'fashions',
+})
+EDITABLE_CONTAINER_FIELDS = frozenset({
+    'num',      # 数量
+})
+
+
+def _is_container_edit_path(path: str) -> bool:
+    """
+    判断 path 是否是合法的容器编辑路径。
+    合法格式: {container}.{index}.{field}
+    例: consumes.0.num
+    """
+    parts = path.split('.')
+    if len(parts) != 3:
+        return False
+    container, idx_str, field = parts
+    if container not in EDITABLE_CONTAINERS:
+        return False
+    if not idx_str.isdigit():
+        return False
+    if field not in EDITABLE_CONTAINER_FIELDS:
+        return False
+    return True
+
+
 # ============== 武器脱下检查 ==============
 
 def check_no_weapon_equipped(
@@ -305,11 +333,14 @@ def validate_field(path: str, value: Any) -> None:
             )
     elif path.startswith('skillPoint.') or (path.startswith('nowSkills.') and path.endswith('.level')):
         pass  # skillPoint / nowSkills.X.level 走下面的专门格式校验
+    elif _is_container_edit_path(path):
+        pass  # 容器编辑路径(consumes.N.num 等)走下面的专门校验
     else:
-        # 既不是顶层白名单,也不是 attributes.X 白名单,也不是 skillPoint/nowSkills
+        # 既不是顶层白名单,也不是 attributes.X 白名单,也不是 skillPoint/nowSkills,也不是容器编辑
         raise InvalidValueError(
             f'{path} 不在白名单(顶层: {sorted(ALLOWED_TOP_PATHS)}, '
-            f'attributes: {sorted(ALLOWED_ATTR_FIELDS)}, skillPoint.X, nowSkills.X.level)'
+            f'attributes: {sorted(ALLOWED_ATTR_FIELDS)}, skillPoint.X, nowSkills.X.level, '
+            f'容器: consumes/equips.X.num)'
         )
 
     if path in ('lev', 'coin', 'currentExp'):
@@ -345,6 +376,14 @@ def validate_field(path: str, value: Any) -> None:
             raise InvalidValueError(f'{path} 必须是非负 int,got {value!r}')
         if value > 30:
             raise InvalidValueError(f'技能等级不能超过 30,got {value}')
+
+    # 容器编辑路径值校验
+    if _is_container_edit_path(path):
+        parts = path.split('.')
+        field = parts[2]
+        if field == 'num':
+            if not isinstance(value, int) or value < 0:
+                raise InvalidValueError(f'{path} num 必须是非负 int,got {value!r}')
 
 
 # ============== 批量应用 ==============

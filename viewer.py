@@ -350,24 +350,41 @@ class PlayerOverviewPage(EditModeMixin, QWidget):
         """
         PlayerOverviewPage 专用:把 {path: (lbl, spin)} 转成 Edit 列表,
         path 形如 'attributes.attack' / 'lev'。
+        只收集与 snapshot 原值不同的字段。
         """
+        if self._data_snapshot is None:
+            return []
         out = []
+        attrs_snap = self._data_snapshot.get('attributes', {}) or {}
         for path, pair in self._field_widgets.items():
             lbl, spin = pair
             val = self._read_widget_value(spin)
             if val is None:
                 continue
+            # 取 snapshot 中的原值
             if path in ('lev', 'coin', 'currentExp'):
                 edit_path = path
+                old_val = self._data_snapshot.get(path)
             else:
                 edit_path = f'attributes.{path}'
+                old_val = attrs_snap.get(path)
+            # 值没变就跳过
+            if old_val is not None and val == old_val:
+                continue
+            # int/float 精度差异也跳过(如 spinbox 显示 0.0 vs 原值 0)
+            if old_val is not None and type(val) != type(old_val):
+                try:
+                    if float(val) == float(int(old_val) if isinstance(old_val, (int, float)) else 0):
+                        continue
+                except (TypeError, ValueError):
+                    pass
             out.append(Edit(path=edit_path, value=val))
         return out
 
 
 
 # =================== PlayerNN 背包页 ===================
-class PlayerBagPage(QWidget):
+class PlayerBagPage(EditModeMixin, QWidget):
     """
     单页:展示角色的背包详情(批 1 只读,批 2 加编辑)
 
@@ -404,10 +421,13 @@ class PlayerBagPage(QWidget):
     ]
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        QWidget.__init__(self, parent)
+        EditModeMixin.__init__(self, page_title='背包')
         self._data: dict | None = None
         self._current_key: str = 'equips'
-        self._items_in_container: list = []  # 当前容器的物品 list
+        self._items_in_container: list = []
+        self._current_item_index: int = 0
+        self._bag_edit_widgets: dict = {}  # {field_key: (label, spinbox)}
         self._build_ui()
 
     def _build_ui(self):
@@ -415,6 +435,9 @@ class PlayerBagPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
+
+        # EditModeMixin 的开关/按钮
+        self._build_edit_mode_controls(layout)
 
         # ===== 顶部第 1 行:容器下拉 + 长度 + 锁状态 =====
         top_row = QHBoxLayout()
@@ -472,12 +495,14 @@ class PlayerBagPage(QWidget):
 
     def _on_item_changed(self, index: int):
         # 找到选中的 item dict 并渲染详情
+        self._current_item_index = index
         if 0 <= index < len(self._items_in_container):
             item = self._items_in_container[index]
             self._render_item_details(item)
 
     def set_data(self, data: dict):
         self._data = data
+        self.take_data_snapshot(data)
         # 注意:先设置数据,再重建物品下拉(_refresh_item_dropdown 会读 _data)
         self._refresh_item_dropdown()
 
@@ -658,14 +683,20 @@ class PlayerBagPage(QWidget):
 
         old_layout.addStretch()
 
+        # 装备容器暂无编辑控件(后续扩展)
+        self._bag_edit_widgets = {}
+        self._apply_edit_mode_to_widgets(self.is_edit_mode)
+
     def _render_consumable_details(self, item: dict):
         """
         消耗品简化详情面板(Q2:物品名 + 数量就够了)。
 
         只显示:
         - 物品名(大字标题)
-        - 数量: num 值(从容器条目顶层)
+        - 数量: num 值(从容器条目顶层),编辑模式下可改为 QSpinBox
         """
+        from PyQt5.QtWidgets import QSpinBox
+
         item_id = str(item.get('id', ''))
         name = get_item_name(item_id)
         display_name = name if name else item_id  # 未命中 fallback
@@ -681,12 +712,23 @@ class PlayerBagPage(QWidget):
         title.setFont(f)
         old_layout.addWidget(title)
 
-        # 数量(大字,显眼)
+        # 数量:label + spinbox 同行,编辑模式切换
+        num_row = QHBoxLayout()
         num_lbl = QLabel(f'数量: {num}')
         fn = QFont()
         fn.setPointSize(14)
         num_lbl.setFont(fn)
-        old_layout.addWidget(num_lbl)
+        num_spin = QSpinBox()
+        num_spin.setRange(0, 99999)
+        num_spin.setValue(int(num))
+        num_spin.setVisible(False)  # 初始只读模式
+        num_row.addWidget(num_lbl)
+        num_row.addWidget(num_spin)
+        num_row.addStretch()
+        old_layout.addLayout(num_row)
+
+        # 记录编辑控件
+        self._bag_edit_widgets = {'num': (num_lbl, num_spin)}
 
         # 提示(告诉用户消耗品详情简化)
         hint = QLabel('(消耗品只显示名称和数量)')
@@ -694,6 +736,8 @@ class PlayerBagPage(QWidget):
         old_layout.addWidget(hint)
 
         old_layout.addStretch()
+        # 刷新编辑模式状态(切物品后控件重建,要重新应用)
+        self._apply_edit_mode_to_widgets(self.is_edit_mode)
 
     def _make_group_title(self, text: str) -> QLabel:
         """分组标题(灰底加粗,小一号的 emoji)"""
@@ -704,6 +748,101 @@ class PlayerBagPage(QWidget):
         lbl.setFont(f)
         lbl.setStyleSheet('color: #555; padding-top: 4px;')
         return lbl
+
+    # ---- EditModeMixin 接口实现 ----
+
+    def _apply_edit_mode_to_widgets(self, on: bool):
+        """
+        切换背包页编辑模式:label ↔ spinbox。
+        nowEquips 容器永远不可编辑。
+        """
+        if self._current_key == 'nowEquips':
+            # 身上装备不能改,即使开了编辑模式也不显示 spinbox
+            for key, (lbl, spin) in self._bag_edit_widgets.items():
+                lbl.setVisible(True)
+                spin.setVisible(False)
+            return
+        for key, (lbl, spin) in self._bag_edit_widgets.items():
+            lbl.setVisible(not on)
+            spin.setVisible(on)
+
+    def _collect_edits(self):
+        """
+        背包页编辑:收集当前物品变更的字段。
+        目前只支持消耗品 num。
+        """
+        if self._data is None or self._current_key == 'nowEquips':
+            return []
+        if not (0 <= self._current_item_index < len(self._items_in_container)):
+            return []
+
+        out = []
+        idx = self._current_item_index
+        item = self._items_in_container[idx]
+        container = self._data.get(self._current_key, []) or []
+        # 取 snapshot 原值
+        attrs_snap = self._data_snapshot.get(self._current_key, []) or [] if self._data_snapshot else []
+
+        for key, (lbl, spin) in self._bag_edit_widgets.items():
+            val = self._read_widget_value(spin)
+            if val is None:
+                continue
+            edit_path = f'{self._current_key}.{idx}.{key}'
+            # 与原值对比,没变就跳过
+            if idx < len(attrs_snap) and isinstance(attrs_snap[idx], dict):
+                old_val = attrs_snap[idx].get(key)
+                if old_val is not None and val == old_val:
+                    continue
+                if old_val is not None and type(val) != type(old_val):
+                    try:
+                        if float(val) == float(old_val):
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+            out.append(Edit(path=edit_path, value=val))
+        return out
+
+    def _do_save(self, edits):
+        """背包页保存:与属性页同模式"""
+        if self._data is None:
+            QMessageBox.warning(self, '保存', '没有数据可保存')
+            return
+        from save_editor import (
+            apply_edits, write_save_atomic, backup_file, check_byte_diff_ok,
+        )
+        from save_codec import KEY_PLAYER
+
+        save = self._data.get('_save_meta')
+        if save is None:
+            QMessageBox.warning(self, '保存', '找不到源文件路径')
+            return
+        path = save['path']
+        key = save.get('key', KEY_PLAYER)
+
+        data_for_edit = {k: v for k, v in self._data.items() if k != '_save_meta'}
+        try:
+            new_data = apply_edits(data_for_edit, edits)
+        except Exception as e:
+            QMessageBox.warning(self, '校验失败', str(e))
+            return
+
+        backup_file(path)
+        try:
+            new_raw = write_save_atomic(path, new_data, key)
+        except Exception as e:
+            QMessageBox.critical(self, '写盘失败', str(e))
+            return
+
+        old_raw = save.get('raw')
+        if old_raw is not None:
+            ok, rate, msg = check_byte_diff_ok(old_raw, new_raw)
+            if not ok:
+                QMessageBox.warning(self, '字节差异超限', f'字节差异 {rate:.4%} 超过硬限。\n{msg}')
+
+        new_data['_save_meta'] = save
+        save['data'] = new_data
+        save['raw'] = new_raw
+        self.set_data(new_data)
 
 
 # =================== PlayerNN 技能页 ===================
@@ -1124,6 +1263,8 @@ class MainWindow(QMainWindow):
                 self.saves[f.name] = {
                     'path': f, 'kind': kind, 'data': data, 'raw': raw,
                 }
+                # 注入 _save_meta 供 PlayerOverviewPage._do_save 读取文件路径/密钥
+                data['_save_meta'] = self.saves[f.name]
                 loaded += 1
             except Exception as e:
                 self.statusBar().showMessage(f'加载 {f.name} 失败: {e}')

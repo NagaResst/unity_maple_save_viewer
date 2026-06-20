@@ -74,7 +74,7 @@ class EditModeMixin:
         # 顶部行:标题 + 弹簧 + 开关
         top_row = QHBoxLayout()
         top_row.addStretch()
-        self.edit_mode_check = QCheckBox('☐ 编辑模式')
+        self.edit_mode_check = QCheckBox('编辑模式')
         self.edit_mode_check.toggled.connect(self._on_edit_mode_toggled)
         top_row.addWidget(self.edit_mode_check)
         top_layout.addLayout(top_row)
@@ -83,17 +83,17 @@ class EditModeMixin:
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        self.btn_undo = QPushButton('↩ 撤销')
+        self.btn_undo = QPushButton('撤销')
         self.btn_undo.clicked.connect(self._on_undo_clicked)
         self.btn_undo.setEnabled(False)
         btn_row.addWidget(self.btn_undo)
 
-        self.btn_cancel = QPushButton('❌ 取消编辑模式')
+        self.btn_cancel = QPushButton('取消编辑模式')
         self.btn_cancel.clicked.connect(self._on_cancel_clicked)
         self.btn_cancel.setEnabled(False)
         btn_row.addWidget(self.btn_cancel)
 
-        self.btn_save = QPushButton('💾 保存')
+        self.btn_save = QPushButton('保存')
         self.btn_save.clicked.connect(self._on_save_clicked)
         self.btn_save.setEnabled(False)
         btn_row.addWidget(self.btn_save)
