@@ -33,9 +33,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Tuple
 
-# 武器在 nowEquips 里的 position(用户 2026-06-20 拍板,Q2 严格相等)
-# 注:具体 itemId 随存档而异(不同账号武器不同),仅 position 编号稳定 = 11
-WEAPON_POSITION_IN_NOW_EQUIPS: int = 11
+try:
+    from item_data import ITEMS as _ITEMS_RAW
+except Exception:
+    _ITEMS_RAW = {}
+
+# 物品库里武器的 EQUIPTYPE
+# 2026-06-20: position 在 nowEquips 中不稳定且会重复,改为按物品类型判定
+WEAPON_EQUIPTYPE: str = '17'
 
 # 浮点字节差异容忍度(批 1.1 拍板,实际 0.004%)
 FLOAT_BYTE_DIFF_TOLERANCE: float = 0.001  # 0.1%
@@ -65,14 +70,16 @@ class InvalidValueError(SaveEditError):
 class WeaponEquippedError(SaveEditError):
     """编辑四维/攻击力前需要先脱下武器(Q3 拍板)"""
 
-    def __init__(self, weapon_position: int, weapon_item_id: Optional[str] = None):
+    def __init__(self, weapon_position: Optional[int] = None, weapon_item_id: Optional[str] = None):
         self.weapon_position = weapon_position
         self.weapon_item_id = weapon_item_id
-        msg = (
-            f'检测到身上穿着武器(position={weapon_position}'
-            + (f', itemId={weapon_item_id}' if weapon_item_id else '')
-            + ')。请先在游戏里脱下武器,再读档回来保存属性改动。'
-        )
+        parts = []
+        if weapon_position is not None and weapon_position >= 0:
+            parts.append(f'position={weapon_position}')
+        if weapon_item_id:
+            parts.append(f'itemId={weapon_item_id}')
+        detail = f" ({', '.join(parts)})" if parts else ''
+        msg = f'检测到身上穿着武器{detail}。请先在游戏里脱下武器,再读档回来保存属性改动。'
         super().__init__(msg)
 
 
@@ -320,10 +327,15 @@ def _is_equip_info_edit_path(path: str) -> bool:
 
 def check_no_weapon_equipped(
     data: dict,
-    weapon_position: int = WEAPON_POSITION_IN_NOW_EQUIPS,
+    weapon_equiptype: str = WEAPON_EQUIPTYPE,
 ) -> Tuple[bool, Optional[str]]:
     """
-    检查身上是否穿着武器(用户 2026-06-20 拍板 Q2 严格 position == 11)。
+    检查身上是否穿着武器。
+
+    判定规则:
+    - 用 nowEquips 里的 item id 去查 item_data.ITEMS
+    - 命中且 EQUIPTYPE == '17' 视为武器
+    - 不再用 position 判定(样例中怀表等饰品也会占用 position=11)
 
     返回 (ok, item_id):
     - ok=True 表示身上没穿武器,可以保存
@@ -331,10 +343,13 @@ def check_no_weapon_equipped(
     """
     now_equips = data.get('nowEquips', []) or []
     for it in now_equips:
-        if it.get('position') == weapon_position:
-            # 物品 id 字段可能叫 'id' (现在存档) 或 'itemId' (旧存档)
-            iid = it.get('id') or it.get('itemId')
-            iid_str = str(iid) if iid is not None else None
+        # 物品 id 字段可能叫 'id' (现在存档) 或 'itemId' (旧存档)
+        iid = it.get('id') or it.get('itemId')
+        iid_str = str(iid) if iid is not None else None
+        if not iid_str:
+            continue
+        meta = _ITEMS_RAW.get(iid_str, {}) if isinstance(_ITEMS_RAW, dict) else {}
+        if isinstance(meta, dict) and str(meta.get('EQUIPTYPE', '')) == str(weapon_equiptype):
             return False, iid_str
     return True, None
 
@@ -428,7 +443,7 @@ def apply_edits(
     edits: Iterable[Edit],
     *,
     require_no_weapon: bool = True,
-    weapon_position: int = WEAPON_POSITION_IN_NOW_EQUIPS,
+    weapon_equiptype: str = WEAPON_EQUIPTYPE,
 ) -> dict:
     """
     把编辑列表应用到 data(深拷贝返回,原 dict 不动)。
@@ -453,9 +468,9 @@ def apply_edits(
     # 武器脱下校验(Q3)
     if require_no_weapon:
         if any(ed.path in WEAPON_GUARD_FIELDS for ed in edits_list):
-            ok, iid = check_no_weapon_equipped(new_data, weapon_position)
+            ok, iid = check_no_weapon_equipped(new_data, weapon_equiptype)
             if not ok:
-                raise WeaponEquippedError(weapon_position, iid)
+                raise WeaponEquippedError(-1, iid)
 
     # 应用
     for ed in edits_list:

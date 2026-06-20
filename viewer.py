@@ -405,6 +405,13 @@ class PlayerBagPage(EditModeMixin, QWidget):
         ('👕 身上装备 (nowEquips) 🔒', 'nowEquips'),
     ]
 
+    STAR_OPTIONS = [
+        ('0星', 0), ('1星', 1), ('2星', 2), ('3星', 3), ('4星', 4), ('5星', 5),
+    ]
+    TYPELV_OPTIONS = [
+        ('C级', 0), ('B级', 1), ('A级', 2), ('S级', 3), ('SS级', 4),
+    ]
+
     EQUIP_EDITABLE_FIELDS = [
         ('star', 'equipInfo.star', (0, 999)),
         ('typeLv', 'equipInfo.typeLv', (0, 999)),
@@ -428,7 +435,7 @@ class PlayerBagPage(EditModeMixin, QWidget):
         self._current_key: str = 'equips'
         self._items_in_container: list = []
         self._current_item_index: int = 0
-        self._bag_edit_widgets: dict = {}  # {field_key: (label, spinbox)}
+        self._bag_edit_widgets: dict = {}  # {field_key: (display_widget, editor_widget)}
         self._build_ui()
 
     def _build_ui(self):
@@ -651,8 +658,8 @@ class PlayerBagPage(EditModeMixin, QWidget):
         star_form = QFormLayout()
         star_form.setSpacing(6)
         star_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._add_bag_edit_row(star_form, 'star:', 'equipInfo.star', ei.get('star', 0), (0, 999))
-        self._add_bag_edit_row(star_form, 'typeLv:', 'equipInfo.typeLv', ei.get('typeLv', 0), (0, 999))
+        self._add_bag_choice_row(star_form, 'star:', 'equipInfo.star', ei.get('star', 0), self.STAR_OPTIONS)
+        self._add_bag_choice_row(star_form, 'typeLv:', 'equipInfo.typeLv', ei.get('typeLv', 0), self.TYPELV_OPTIONS)
         if self._current_key == 'nowEquips':
             star_form.addRow('position:', QLabel(str(item.get('position', ''))))
         star_form_w = QWidget()
@@ -687,7 +694,7 @@ class PlayerBagPage(EditModeMixin, QWidget):
 
         old_layout.addStretch()
 
-        self.register_field_widgets({k: spin for k, (lbl, spin) in self._bag_edit_widgets.items()})
+        self.register_field_widgets({k: widget for k, (_, widget) in self._bag_edit_widgets.items()})
         self._apply_edit_mode_to_widgets(self.is_edit_mode)
 
     def _render_consumable_details(self, item: dict):
@@ -777,6 +784,31 @@ class PlayerBagPage(EditModeMixin, QWidget):
         form.addRow(label_text, wrap)
         self._bag_edit_widgets[field_key] = (lbl, spin)
 
+    def _add_bag_choice_row(self, form, label_text: str, field_key: str, value, options):
+        """详情面板里加一行枚举下拉,查看时禁用显示,编辑模式下可选。"""
+        from PyQt5.QtWidgets import QComboBox
+
+        combo = QComboBox()
+        try:
+            current_value = int(value)
+        except (TypeError, ValueError):
+            current_value = 0
+
+        found = False
+        for text, data in options:
+            combo.addItem(text, data)
+            if data == current_value:
+                found = True
+        if not found:
+            combo.addItem(f'未知({current_value})', current_value)
+
+        idx = combo.findData(current_value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        combo.setEnabled(False)
+        form.addRow(label_text, combo)
+        self._bag_edit_widgets[field_key] = (combo, combo)
+
     # ---- EditModeMixin 接口实现 ----
 
     def _apply_edit_mode_to_widgets(self, on: bool):
@@ -786,13 +818,21 @@ class PlayerBagPage(EditModeMixin, QWidget):
         """
         if self._current_key == 'nowEquips':
             # 身上装备不能改,即使开了编辑模式也不显示 spinbox
-            for key, (lbl, spin) in self._bag_edit_widgets.items():
-                lbl.setVisible(True)
-                spin.setVisible(False)
+            for key, (display_widget, editor_widget) in self._bag_edit_widgets.items():
+                if display_widget is editor_widget:
+                    editor_widget.setVisible(True)
+                    editor_widget.setEnabled(False)
+                else:
+                    display_widget.setVisible(True)
+                    editor_widget.setVisible(False)
             return
-        for key, (lbl, spin) in self._bag_edit_widgets.items():
-            lbl.setVisible(not on)
-            spin.setVisible(on)
+        for key, (display_widget, editor_widget) in self._bag_edit_widgets.items():
+            if display_widget is editor_widget:
+                editor_widget.setVisible(True)
+                editor_widget.setEnabled(on)
+            else:
+                display_widget.setVisible(not on)
+                editor_widget.setVisible(on)
 
     def _collect_edits(self):
         """

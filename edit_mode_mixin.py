@@ -100,15 +100,17 @@ class EditModeMixin:
         mixin 会给每个 spinbox/lineedit 装上 valueChanged/textChanged 监听,
         值变化时启用 save/undo 按钮。
 
-        widgets: {path: QWidget} (QSpinBox/QDoubleSpinBox/QLineEdit)
+        widgets: {path: QWidget} (QSpinBox/QDoubleSpinBox/QLineEdit/QComboBox)
         """
-        from PyQt5.QtWidgets import QSpinBox, QDoubleSpinBox, QLineEdit
+        from PyQt5.QtWidgets import QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox
         for path, w in widgets.items():
             # spin 类的 valueChanged(int|float)
             if isinstance(w, (QSpinBox, QDoubleSpinBox)):
                 w.valueChanged.connect(self._on_field_changed)
             elif isinstance(w, QLineEdit):
                 w.textChanged.connect(self._on_field_changed)
+            elif isinstance(w, QComboBox):
+                w.currentIndexChanged.connect(self._on_field_changed)
         # 同时也存一份到 self._mixin_tracked_widgets(供 _disconnect_fields 用)
         self._mixin_tracked_widgets = list(widgets.values())
 
@@ -233,10 +235,13 @@ class EditModeMixin:
         return field_key
 
     def _read_widget_value(self, w) -> object:
-        """从控件读值。QSpinBox/QDoubleSpinBox 取 value(),QLineEdit 取 text() 转 int。"""
-        from PyQt5.QtWidgets import QSpinBox, QDoubleSpinBox, QLineEdit
+        """从控件读值。QSpinBox/QDoubleSpinBox 取 value(),QComboBox 取 currentData。"""
+        from PyQt5.QtWidgets import QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox
         if isinstance(w, QSpinBox) or isinstance(w, QDoubleSpinBox):
             return w.value()
+        if isinstance(w, QComboBox):
+            data = w.currentData()
+            return data if data is not None else w.currentText()
         if isinstance(w, QLineEdit):
             text = w.text().strip()
             if not text:
