@@ -382,6 +382,36 @@ def add_equip_to_bag(data: dict, item_id: str, num: int = 1) -> dict:
     return new_data
 
 
+def add_consume_to_bag(data: dict, item_id: str, num: int = 1) -> dict:
+    """
+    向 consumes 容器新增一个消耗品,返回深拷贝后的新 data。
+
+    规则:
+    - item_id 必须是 8 位消耗品 ID
+    - position 由程序自动分配,且不得与当前 consumes 中已有 position 冲突
+    - 目前走 item_data 生成的最小消耗品结构
+    """
+    if not isinstance(item_id, str) or len(item_id) != 8:
+        raise InvalidValueError(f'消耗品 ID 必须是 8 位字符串,got {item_id!r}')
+    if not isinstance(num, int) or num <= 0:
+        raise InvalidValueError(f'消耗品数量必须是正整数,got {num!r}')
+
+    from item_templates import make_minimal_consume, next_available_position
+
+    new_data = copy.deepcopy(data)
+    consumes = new_data.setdefault('consumes', [])
+    if not isinstance(consumes, list):
+        raise InvalidPathError(f'consumes 必须是 list,实际是 {type(consumes).__name__}')
+
+    new_item = make_minimal_consume(item_id, num=num)
+    if new_item is None:
+        raise InvalidValueError(f'未知消耗品 ID 或该物品不是消耗品: {item_id}')
+
+    new_item['position'] = next_available_position(consumes)
+    consumes.append(new_item)
+    return new_data
+
+
 # ============== 单字段校验 ==============
 
 def validate_field(path: str, value: Any) -> None:

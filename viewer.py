@@ -372,6 +372,8 @@ class PlayerBagPage(EditModeMixin, QWidget):
         ('👕 身上装备 (nowEquips) 🔒', 'nowEquips'),
     ]
 
+    ADDABLE_CONTAINERS = frozenset({'equips', 'consumes'})
+
     STAR_OPTIONS = [
         ('0星', 0), ('1星', 1), ('2星', 2), ('3星', 3), ('4星', 4), ('5星', 5),
     ]
@@ -464,7 +466,11 @@ class PlayerBagPage(EditModeMixin, QWidget):
             self.lbl_locked.setText('🔒 身上穿的不能改')
         else:
             self.lbl_locked.setText('')
-        self.btn_add_equip.setEnabled(self._current_key == 'equips' and self._data is not None)
+        self.btn_add_equip.setEnabled(self._current_key in self.ADDABLE_CONTAINERS and self._data is not None)
+        if self._current_key == 'consumes':
+            self.btn_add_equip.setText('添加消耗品')
+        else:
+            self.btn_add_equip.setText('添加装备')
 
     def _on_container_changed(self, index: int):
         self._current_key = self.cmb_container.itemData(index)
@@ -583,6 +589,20 @@ class PlayerBagPage(EditModeMixin, QWidget):
                 return typed
         return None
 
+    def _resolve_consume_choice(self, combo) -> str | None:
+        """从可编辑下拉里解析出最终选中的消耗品 ID。"""
+        idx = combo.currentIndex()
+        if idx >= 0 and combo.currentText().strip() == combo.itemText(idx).strip():
+            data = combo.itemData(idx)
+            return str(data) if data is not None else None
+
+        typed = combo.currentText().strip()
+        if len(typed) == 8 and typed.isdigit():
+            meta = ITEMS.get(typed, {}) if isinstance(ITEMS, dict) else {}
+            if isinstance(meta, dict) and str(meta.get('TYPE', '')) == '2':
+                return typed
+        return None
+
     def _choose_equip_id(self) -> str | None:
         """弹出一个可输入搜索文字的下拉选择框,返回装备 ID。"""
         from PyQt5.QtWidgets import QComboBox, QCompleter
@@ -642,13 +662,88 @@ class PlayerBagPage(EditModeMixin, QWidget):
             return None
         return self._resolve_equip_choice(combo)
 
+    def _choose_consume_item(self) -> tuple[str, int] | None:
+        """弹出一个可输入搜索文字的下拉选择框,返回(消耗品 ID, 数量)。"""
+        from PyQt5.QtWidgets import QComboBox, QCompleter, QSpinBox
+
+        consume_items = []
+        if isinstance(ITEMS, dict):
+            for item_id, meta in ITEMS.items():
+                if isinstance(meta, dict) and str(meta.get('TYPE', '')) == '2':
+                    consume_items.append((str(meta.get('NAME') or item_id), item_id))
+        consume_items.sort(key=lambda item: (item[0], item[1]))
+        if not consume_items:
+            QMessageBox.warning(self, '添加消耗品', '当前没有可选的消耗品数据')
+            return None
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle('选择消耗品')
+        dlg.resize(560, 140)
+        layout = QVBoxLayout(dlg)
+
+        hint = QLabel('输入消耗品名称或 8 位 ID 搜索,然后从下拉建议中选择:')
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.setInsertPolicy(QComboBox.NoInsert)
+        combo.setMaxVisibleItems(20)
+        for item_name, item_id in consume_items:
+            combo.addItem(f'{item_name} ({item_id})', item_id)
+
+        completer = combo.completer()
+        if completer is not None:
+            completer.setCaseSensitivity(Qt.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchContains)
+            completer.setCompletionMode(QCompleter.PopupCompletion)
+        if combo.lineEdit() is not None:
+            combo.lineEdit().setPlaceholderText('例如: 白色药水 / 02030000')
+            combo.lineEdit().selectAll()
+        layout.addWidget(combo)
+
+        qty_row = QHBoxLayout()
+        qty_row.addWidget(QLabel('数量:'))
+        qty_spin = QSpinBox()
+        qty_spin.setRange(1, 999)
+        qty_spin.setValue(1)
+        qty_row.addWidget(qty_spin)
+        qty_row.addStretch()
+        layout.addLayout(qty_row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText('添加')
+        buttons.button(QDialogButtonBox.Cancel).setText('取消')
+        ok_btn = buttons.button(QDialogButtonBox.Ok)
+
+        def _refresh_ok_state(*args):
+            ok_btn.setEnabled(self._resolve_consume_choice(combo) is not None)
+
+        combo.currentIndexChanged.connect(_refresh_ok_state)
+        combo.editTextChanged.connect(_refresh_ok_state)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        _refresh_ok_state()
+
+        if dlg.exec_() != QDialog.Accepted:
+            return None
+        item_id = self._resolve_consume_choice(combo)
+        if item_id is None:
+            return None
+        return item_id, qty_spin.value()
+
     def on_add_equip(self):
-        """最小可用版:下拉选择装备,自动加到 equips 并分配不冲突的 position。"""
+        """按当前容器添加装备或消耗品,并自动分配不冲突的 position。"""
         if self._data is None:
-            QMessageBox.warning(self, '添加装备', '没有数据可操作')
+            QMessageBox.warning(self, '添加物品', '没有数据可操作')
             return
-        if self._current_key != 'equips':
-            QMessageBox.information(self, '添加装备', '当前只支持添加到背包装备 equips')
+        if self._current_key not in self.ADDABLE_CONTAINERS:
+            QMessageBox.information(self, '添加物品', '当前容器不支持添加物品')
+            return
+
+        if self._current_key == 'consumes':
+            self.on_add_consume()
             return
 
         item_id = self._choose_equip_id()
@@ -683,6 +778,49 @@ class PlayerBagPage(EditModeMixin, QWidget):
         position = new_item.get('position') if isinstance(new_item, dict) else '?'
         if self._persist_bag_data(new_data):
             QMessageBox.information(self, '添加装备', f'已添加 {item_name} ({item_id})\nposition={position}')
+
+    def on_add_consume(self):
+        """下拉选择消耗品,自动加到 consumes 并分配不冲突的 position。"""
+        if self._data is None:
+            QMessageBox.warning(self, '添加消耗品', '没有数据可操作')
+            return
+        if self._current_key != 'consumes':
+            QMessageBox.information(self, '添加消耗品', '当前只支持添加到消耗品 consumes')
+            return
+
+        consume_item = self._choose_consume_item()
+        if not consume_item:
+            return
+        item_id, qty = consume_item
+        meta = ITEMS.get(item_id, {}) if isinstance(ITEMS, dict) else {}
+        if not isinstance(meta, dict) or str(meta.get('TYPE', '')) != '2':
+            QMessageBox.warning(self, '添加消耗品', f'无效消耗品 ID 或该物品不是消耗品: {item_id}')
+            return
+
+        item_name = meta.get('NAME') or item_id
+        reply = QMessageBox.question(
+            self,
+            '确认添加',
+            f'确认添加消耗品\n\n{item_name} ({item_id})\n数量: {qty}\n\nposition 将自动分配且不与现有消耗品重复。',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        from save_editor import add_consume_to_bag
+
+        data_for_edit = {k: v for k, v in self._data.items() if k != '_save_meta'}
+        try:
+            new_data = add_consume_to_bag(data_for_edit, item_id, num=qty)
+        except Exception as e:
+            QMessageBox.warning(self, '添加消耗品失败', str(e))
+            return
+
+        new_item = (new_data.get('consumes', []) or [])[-1] if new_data.get('consumes') else None
+        position = new_item.get('position') if isinstance(new_item, dict) else '?'
+        if self._persist_bag_data(new_data):
+            QMessageBox.information(self, '添加消耗品', f'已添加 {item_name} ({item_id})\n数量={qty}\nposition={position}')
 
     def _render_item_details(self, item: dict):
         """

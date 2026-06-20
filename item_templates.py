@@ -176,6 +176,40 @@ def make_minimal_equip(item_id: str, num: int = 1, slot_max: int = 999) -> Optio
     }
 
 
+def make_minimal_consume(item_id: str, num: int = 1, slot_max: int = 999) -> Optional[dict]:
+    """
+    根据 item_data 生成一个最小可用消耗品结构。
+
+    约束:
+    - 只接受 item_data 里 TYPE == '2' 的消耗品 ID
+    - position 仍然由 caller 后续自动分配
+    """
+    meta = _ITEMS_RAW.get(item_id, {}) if isinstance(_ITEMS_RAW, dict) else {}
+    if not isinstance(meta, dict) or str(meta.get('TYPE', '')) != '2':
+        return None
+    if num < 0:
+        raise ValueError(f'num 不能为负: {num}')
+    if num > slot_max:
+        raise ValueError(f'num 超过上限 {slot_max}: {num}')
+
+    return {
+        'id': item_id,
+        'num': num,
+        'nowNum': 0,
+        'position': -1,
+        'gainType': 0,
+        'price': 0,
+        'shopPrice': 0,
+        'type': 3,
+        'bulletFlag': False,
+        'cantUse': False,
+        'petFlag': False,
+        'chairFlag': False,
+        'hitNumberFlag': False,
+        'equipInfo': dict(_EQUIP_INFO_BLANK),
+    }
+
+
 def next_available_position(container: list) -> int:
     """
     在给定容器列表里找未用的最小 position(从 0 开始)。
